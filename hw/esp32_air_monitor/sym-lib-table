@@ -1,0 +1,5 @@
+(sym_lib_table
+  (lib (name connectors)(type Legacy)(uri ${KIPRJMOD}/../libraries_footprints/connectors_lib/connectors.lib)(options "")(descr ""))
+  (lib (name SCD30)(type Legacy)(uri ${KIPRJMOD}/../libraries_footprints/kicad_SCD30/SCD30.lib)(options "")(descr ""))
+  (lib (name ESP32-DEVKITC-32D)(type Legacy)(uri ${KIPRJMOD}/../libraries_footprints/ESP32-DEVKITC-32D/ESP32-DEVKITC-32D.lib)(options "")(descr ""))
+)

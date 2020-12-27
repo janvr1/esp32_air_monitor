@@ -1,0 +1,7 @@
+"Id";"Designator";"Package";"Quantity";"Designation";"Supplier and ref";
+1;"U1";"MODULE_ESP32-DEVKITC-32D";1;"ESP32-DEVKITC-32D";;;
+2;"U2";"MODULE_SCD30";1;"SCD30";;;
+3;"J2,J3";"Connector_LED_matrix_64x32";2;"Connector_LED_matrix_64x32";;;
+4;"J5";"Connector_Adafruit_VEML7700";1;"Connector_Adafruit_VEML7700";;;
+5;"J4";"Connector_Pimoroni_BME280";1;"Connector_Pimoroni_BME280";;;
+6;"J1";"PinHeader_1x02_P2.54mm_Vertical";1;"Conn_01x02_Male";;;

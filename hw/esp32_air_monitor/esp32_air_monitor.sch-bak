@@ -4,11 +4,11 @@ EELAYER END
 $Descr A4 11693 8268
 encoding utf-8
 Sheet 1 1
-Title ""
-Date ""
-Rev ""
+Title "ESP32 Air monitor"
+Date "2020-12-26"
+Rev "0.1"
 Comp ""
-Comment1 ""
+Comment1 "Author: Jan Vrhovec"
 Comment2 ""
 Comment3 ""
 Comment4 ""
