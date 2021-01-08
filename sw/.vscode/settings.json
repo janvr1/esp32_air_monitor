@@ -1,0 +1,20 @@
+{
+  "C_Cpp.clang_format_style": "Visual Studio",
+  "editor.formatOnSave": false,
+  "[cpp]": {
+    "editor.quickSuggestions": true
+  },
+  "[c]": {
+    "editor.quickSuggestions": true
+  },
+  "C_Cpp.intelliSenseEngine": "Tag Parser",
+  "idf.port": "/dev/ttyUSB0",
+  "files.associations": {
+    "*.ipp": "c",
+    "*.inc": "c",
+    "future": "c",
+    "istream": "c",
+    "ostream": "c",
+    "system_error": "c"
+  }
+}
