@@ -3,6 +3,9 @@
 
 #include <driver/i2c.h>
 
+#define BME280_I2C_ADDRESS 0x76
+#define BME280_I2C_ADDRESS_ALT 0x77
+
 typedef enum bme280_mode
 {
     BME280_MODE_SLEEP = 0b00,

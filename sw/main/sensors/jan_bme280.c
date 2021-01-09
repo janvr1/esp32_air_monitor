@@ -1,4 +1,4 @@
-#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+// #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include "jan_bme280.h"
 #include <stdint.h>
@@ -28,9 +28,9 @@ static const char *TAG = "JAN_BME280";
 // static uint8_t BME280_I2C_ADDR;
 // static i2c_port_t BME280_I2C_PORT;
 
-void bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data);
-void bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data);
-void bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size_t size);
+esp_err_t bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data);
+esp_err_t bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data);
+esp_err_t bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size_t size);
 void bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig);
 uint32_t bme280_compensate_temp(bme280_dev_t *bme, int32_t adc_temp, int32_t *t_fine);
 uint32_t bme280_compensate_pres(bme280_dev_t *bme, int32_t adc_p, int32_t t_fine);
@@ -117,18 +117,14 @@ void bme280_measurement(bme280_dev_t *bme)
     bme280_read_register(bme, BME280_REG_STATUS, &status);
     while (status & 0x09)
     {
+        ESP_LOGD(TAG, "Waiting for status register to clear. Current value: 0x%02x", status & 0x09);
         vTaskDelay(1 / portTICK_PERIOD_MS);
         bme280_read_register(bme, BME280_REG_STATUS, &status);
-        ESP_LOGD(TAG, "Waiting for status register to clear. Current value: 0x%02x", status & 0x09);
     }
 
     // Burst read all the measurement registers
     bme280_read_registers(bme, BME280_REG_PRESS_MSB, data, 8);
 
-    for (uint8_t i = 0; i < 8; i++)
-    {
-        printf("data[%d]: 0x%02x\n", i, data[i]);
-    }
     adc_pres = data[0] << 12 | data[1] << 4 | data[2] >> 4;
     ESP_LOGD(TAG, "Read ADC pressure: %d", adc_pres);
 
@@ -142,17 +138,22 @@ void bme280_measurement(bme280_dev_t *bme)
     ESP_LOGD(TAG, "Read fixed temperature: %d ", temp_fixed);
     ESP_LOGD(TAG, "Read t_fine=%d", t_fine);
     bme->temperature = (float)temp_fixed / 100.00;
-    ESP_LOGI(TAG, "Read temperature: %f °C", bme->temperature);
 
     uint32_t pres_fixed = bme280_compensate_pres(bme, adc_pres, t_fine);
     ESP_LOGD(TAG, "Read fixed pressure: %d", pres_fixed);
     bme->pressure = (float)pres_fixed / 256.00;
-    ESP_LOGI(TAG, "Read pressure: %f Pa", bme->pressure);
 
     uint32_t humi_fixed = bme280_compensate_humi(bme, adc_humi, t_fine);
     ESP_LOGD(TAG, "Read fixed humidity: %d", humi_fixed);
     bme->humidity = (float)humi_fixed / 1024.00;
-    ESP_LOGI(TAG, "Read humidity: %f %%RH", bme->humidity);
+
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "******** Begin Bosch BME280 measurement ********");
+    ESP_LOGI(TAG, "Temperature: %f °C", bme->temperature);
+    ESP_LOGI(TAG, "Humidity: %f %%RH", bme->humidity);
+    ESP_LOGI(TAG, "Pressure: %f Pa", bme->pressure);
+    ESP_LOGI(TAG, "******** End Bosch BME280 measurement ********");
+    ESP_LOGI(TAG, "");
 }
 
 uint32_t bme280_compensate_temp(bme280_dev_t *bme, int32_t adc_temp, int32_t *t_fine)
@@ -265,48 +266,63 @@ void bme280_load_calib_data(bme280_dev_t *bme)
     ESP_LOGD(TAG, "DIG_H6: %d", bme->calib_data.dig_H6);
 }
 
-void bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data)
+esp_err_t bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     ESP_ERROR_CHECK(i2c_master_start(cmd));                                                               // Produce start conditon
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, I2C_MASTER_ACK)); // Select I2C device
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, I2C_MASTER_ACK));                                     // Write the register address to be read later
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, true)); // Select I2C device
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, true));                                     // Write the register address to be read later
 
     ESP_ERROR_CHECK(i2c_master_start(cmd));                                                              // Repeated start condition
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, I2C_MASTER_ACK)); // Select I2C device
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, true)); // Select I2C device
     ESP_ERROR_CHECK(i2c_master_read_byte(cmd, data, I2C_MASTER_NACK));                                   // Read the data from device
     ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                               // Stop conditon
-    ESP_ERROR_CHECK(i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS));
+    esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+    }
     i2c_cmd_link_delete(cmd);
+    return ret;
 };
 
-void bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data)
+esp_err_t bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     ESP_ERROR_CHECK(i2c_master_start(cmd));
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, I2C_MASTER_ACK)); // Select I2C device
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, I2C_MASTER_ACK));                                     // Write the register address to be written later
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, data, I2C_MASTER_ACK));                                    // Write the data
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, true)); // Select I2C device
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, true));                                     // Write the register address to be written later
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, data, true));                                    // Write the data
     ESP_ERROR_CHECK(i2c_master_stop(cmd));
-    ESP_ERROR_CHECK(i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS));
+    esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+    }
     i2c_cmd_link_delete(cmd);
+    return ret;
 }
 
-void bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size_t size)
+esp_err_t bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size_t size)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     ESP_ERROR_CHECK(i2c_master_start(cmd));                                                               // Produce start conditon
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, I2C_MASTER_ACK)); // Select I2C device
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, I2C_MASTER_ACK));                                     // Write the register address to be read later
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, true)); // Select I2C device
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, true));                                     // Write the register address to be read later
 
     ESP_ERROR_CHECK(i2c_master_start(cmd));                                                              // Repeated start condition
-    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, I2C_MASTER_ACK)); // Select I2C device
+    ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, true)); // Select I2C device
     ESP_ERROR_CHECK(i2c_master_read(cmd, data, size, I2C_MASTER_LAST_NACK));                             // Read the data from device
     ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                               // Stop conditon
-    ESP_ERROR_CHECK(i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS));
+    esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+    }
     i2c_cmd_link_delete(cmd);
+    return ret;
 }
 
 void bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig)
