@@ -24,14 +24,17 @@ uint8_t scd30_crc(uint8_t data[], size_t size);
 esp_err_t scd30_write(scd30_dev_t *scd, uint16_t scd_cmd, void *data, size_t size);
 esp_err_t scd30_read(scd30_dev_t *scd, void *data, size_t size);
 
-scd30_dev_t scd30_begin(i2c_port_t i2c_port)
+scd30_dev_t scd30_begin(i2c_port_t i2c_port, uint16_t interval, uint16_t t_cutoff)
 {
+
     scd30_dev_t scd30 = {
         .i2c_port = i2c_port,
         .temperature = 0.0,
         .humidity = 0.0,
-        .co2 = 0.0,
-    };
+        .alpha = scd30_calculate_alpha(interval, t_cutoff),
+        .t_cutoff = t_cutoff,
+        .co2 = 400.0,
+        .co2_ewma = 400.0};
     struct scd30_fw_ver fw = scd30_get_fw_version(&scd30);
     ESP_LOGI(TAG, "SCD30 firmware version %d.%d", fw.major, fw.minor);
     return scd30;
@@ -65,7 +68,11 @@ void scd30_set_interval(scd30_dev_t *scd, uint16_t interval)
     data[0] = (interval & 0xFF00) >> 8;
     data[1] = interval & 0x00FF;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_SET_INTERVAL, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_SET_INTERVAL, data, 3);
+    if (ret == ESP_OK)
+        scd->alpha = scd30_calculate_alpha(interval, scd->t_cutoff);
+    else
+        ESP_LOGE(TAG, "Error setting interval: %s", esp_err_to_name(ret));
 }
 
 uint16_t scd30_get_interval(scd30_dev_t *scd)
@@ -84,6 +91,7 @@ uint16_t scd30_get_interval(scd30_dev_t *scd)
         ESP_LOGE(TAG, "CRC mismatch in get interval. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
         return 0;
     }
+    scd->alpha = scd30_calculate_alpha(interval, scd->t_cutoff);
     return interval;
 }
 
@@ -136,12 +144,14 @@ void scd30_read_measurement(scd30_dev_t *scd)
     scd->temperature = *(float *)&t_int;
     scd->humidity = *(float *)&humi_int;
     scd->co2 = *(float *)&co2_int;
+    scd->co2_ewma = SCD30_ALPHA * scd->co2 + (1 - SCD30_ALPHA) * scd->co2_ewma;
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "******** Begin Sensirion SCD30 measurement ********");
     ESP_LOGI(TAG, "Temperature: %f °C", scd->temperature);
     ESP_LOGI(TAG, "Humidity: %f %%RH", scd->humidity);
     ESP_LOGI(TAG, "CO2: %f ppm", scd->co2);
+    ESP_LOGI(TAG, "CO2_ewma: %f ppm", scd->co2_ewma);
     ESP_LOGI(TAG, "******** End Sensirion SCD30 measurement ********");
     ESP_LOGI(TAG, "");
 }
@@ -281,6 +291,14 @@ void scd30_print_config(scd30_dev_t *scd)
 void scd30_soft_reset(scd30_dev_t *scd)
 {
     scd30_write(scd, SCD30_CMD_RESET, 0, 0);
+}
+
+float scd30_calculate_alpha(uint16_t interval, uint16_t t_cutoff)
+{
+    float pi = 3.141592;
+    float alpha = (2 * pi * interval / t_cutoff) / (1 + (2 * pi * interval / t_cutoff));
+    ESP_LOGD(TAG, "Calculated alpha=%f", alpha);
+    return alpha;
 }
 
 esp_err_t scd30_write(scd30_dev_t *scd, uint16_t scd_cmd, void *data, size_t size)
