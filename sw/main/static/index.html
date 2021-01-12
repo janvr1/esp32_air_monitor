@@ -1,1 +1,132 @@
-Pozdravljen svet!
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" content="width=device-width, initial-scale=1" name="viewport" />
+    <title>ESP32 air quality monitor</title>
+    <link href="/bulma.min.css" rel="stylesheet" />
+    <link href="/favicon.ico" rel="icon" type="image/x-icon" />
+</head>
+
+<body>
+    <nav class="navbar" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a class="navbar-item" href="/index">
+                <img src="/logo.png" width="90" height="30">
+            </a>
+
+            <a role="button" class="navbar-burger" id="navbar_burger" aria-label="menu" aria-expanded="false"
+                data-target="navbarBasicExample">
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+            </a>
+        </div>
+
+        <div class="navbar-menu" id="navbar_menu">
+            <div class="navbar-start">
+                <a href="/index" class="navbar-item">
+                    <p class="subtitle"> Dashboard</p>
+                </a>
+
+                <a href="/settings" class="navbar-item">
+                    <p class="subtitle"> Settings</p>
+                </a>
+            </div>
+
+            <div class="navbar-end">
+                <p class="navbar-item" id="datetime">
+                    Datetime
+                </p>
+            </div>
+        </div>
+    </nav>
+    <section class="section">
+        <div class="container">
+            <div class="columns">
+                <div class="column is-two-thirds">
+                    <div class="box" style="height: 100%">
+                        <p class="title">
+                            Measurements
+                        </p>
+                        <div class="tile is-ancestor">
+                            <div class="tile is-vertical">
+                                <div class="tile">
+                                    <div class="tile is-4 is-parent">
+                                        <div class="tile is-child box">
+                                            <p class="subtitle">Temperature</p>
+                                            <p class="title" id="temperature"></p>
+                                        </div>
+                                    </div>
+                                    <div class="tile is-4 is-parent">
+                                        <div class="tile is-child box">
+                                            <p class="subtitle">Humidity</p>
+                                            <p class="title" id="humidity"></p>
+                                        </div>
+                                    </div>
+                                    <div class="tile is-4 is-parent">
+                                        <div class="tile is-child box">
+                                            <p class="subtitle">CO<sub>2</sub></p>
+                                            <p class="title" id="co2"></p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tile">
+                                    <div class="tile is-4 is-parent">
+                                        <div class="tile is-child box">
+                                            <p class="subtitle">Pressure</p>
+                                            <p class="title" id="pressure"></p>
+                                        </div>
+                                    </div>
+                                    <div class="tile is-4 is-parent">
+                                        <div class="tile is-child box">
+                                            <p class="subtitle">Illuminance</p>
+                                            <p class="title" id="illuminance"></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="column is-one-third">
+                    <div class="box">
+                        <p class="title">
+                            Device info
+                        </p>
+                        <table class="table is-striped is-fullwidth">
+                            <tr>
+                                <th>Name</th>
+                                <td id="device_name"></td>
+                            </tr>
+                            <tr>
+                                <th>Location</th>
+                                <td id="device_location"></td>
+                            </tr>
+                            <tr>
+                                <th>WiFi SSID</th>
+                                <td id="device_ssid"></td>
+                            </tr>
+                            <tr>
+                                <th>IP address</th>
+                                <td id="device_ip"></td>
+                            </tr>
+                            <tr>
+                                <th>MAC address</th>
+                                <td id="device_mac"></td>
+                            </tr>
+                            <tr>
+                                <th>SCD30 ASC</th>
+                                <td id="device_asc"></td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <script src="common.js"></script>
+    <script src="index.js"></script>
+</body>
+
+</html>

@@ -1,4 +1,4 @@
-// #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include <stdint.h>
 #include <esp_log.h>
@@ -23,25 +23,28 @@ static const char *TAG = "JAN_SCD30";
 uint8_t scd30_crc(uint8_t data[], size_t size);
 esp_err_t scd30_write(scd30_dev_t *scd, uint16_t scd_cmd, void *data, size_t size);
 esp_err_t scd30_read(scd30_dev_t *scd, void *data, size_t size);
+float scd30_calculate_alpha(uint16_t interval, uint16_t t_cutoff);
 
-scd30_dev_t scd30_begin(i2c_port_t i2c_port, uint16_t interval, uint16_t t_cutoff)
+esp_err_t scd30_begin(scd30_dev_t *scd, i2c_port_t i2c_port, uint16_t interval, uint16_t t_cutoff)
 {
+    scd->i2c_port = i2c_port;
+    scd->t_cutoff = t_cutoff;
 
-    scd30_dev_t scd30 = {
-        .i2c_port = i2c_port,
-        .temperature = 0.0,
-        .humidity = 0.0,
-        .alpha = scd30_calculate_alpha(interval, t_cutoff),
-        .t_cutoff = t_cutoff,
-        .co2 = 400.0,
-        .co2_ewma = 400.0};
-    struct scd30_fw_ver fw = scd30_get_fw_version(&scd30);
-    ESP_LOGI(TAG, "SCD30 firmware version %d.%d", fw.major, fw.minor);
-    return scd30;
+    scd30_fw_ver_t scd_fw;
+    esp_err_t ret = scd30_get_fw_version(scd, &scd_fw);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        return ret;
+    ESP_LOGD(TAG, "SCD30 firmware version %d.%d", scd_fw.major, scd_fw.minor);
+
+    ret = scd30_set_interval(scd, interval);
+
+    return ret;
 }
 
-void scd30_start_measurement(scd30_dev_t *scd, uint16_t pressure)
+esp_err_t scd30_start_measurement(scd30_dev_t *scd, uint16_t pressure)
 {
+    vTaskDelay(30 / portTICK_PERIOD_MS);
     if ((pressure > 1400) | (pressure < 700))
     {
         pressure = 0;
@@ -50,18 +53,25 @@ void scd30_start_measurement(scd30_dev_t *scd, uint16_t pressure)
     data[0] = (pressure & 0xFF00) >> 8;
     data[1] = pressure & 0x00FF;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_START_MEASURE, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_START_MEASURE, data, 3);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error starting measurement");
+    return ret;
 }
 
-void scd30_stop_measurement(scd30_dev_t *scd)
+esp_err_t scd30_stop_measurement(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_STOP_MEASURE, 0, 0);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_STOP_MEASURE, 0, 0);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error stopping measurement");
+    return ret;
 }
 
-void scd30_set_interval(scd30_dev_t *scd, uint16_t interval)
+esp_err_t scd30_set_interval(scd30_dev_t *scd, uint16_t interval)
 {
     if ((interval < 2) | (interval > 1800))
     {
+        ESP_LOGW(TAG, "Interval out of range. Setting the interval to 5");
         interval = 5;
     }
     uint8_t data[3];
@@ -69,59 +79,88 @@ void scd30_set_interval(scd30_dev_t *scd, uint16_t interval)
     data[1] = interval & 0x00FF;
     data[2] = scd30_crc(data, 2);
     esp_err_t ret = scd30_write(scd, SCD30_CMD_SET_INTERVAL, data, 3);
+
     if (ret == ESP_OK)
         scd->alpha = scd30_calculate_alpha(interval, scd->t_cutoff);
     else
-        ESP_LOGE(TAG, "Error setting interval: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error setting interval");
+
+    return ret;
 }
 
-uint16_t scd30_get_interval(scd30_dev_t *scd)
+int16_t scd30_get_interval(scd30_dev_t *scd)
 {
-    // uint8_t test[2] = {0xBE, 0xEF};
-    // uint8_t c = scd30_crc(test, 2);
-    // ESP_LOGI(TAG, "CRC BEEF: 0x%02x", c);
-
     uint8_t data[3];
-    scd30_write(scd, SCD30_CMD_SET_INTERVAL, 0, 0);
-    scd30_read(scd, data, 3);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_SET_INTERVAL, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for get_interval");
+        return -1;
+    }
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for get_interval");
+        return -1;
+    }
     uint16_t interval = ((uint16_t)data[0] << 8) | data[1];
     // ESP_LOGI(TAG, "Received interval %d", interval);
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get interval. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return 0;
+        return -1;
     }
     scd->alpha = scd30_calculate_alpha(interval, scd->t_cutoff);
     return interval;
 }
 
-bool scd30_data_ready(scd30_dev_t *scd)
+int8_t scd30_data_ready(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_DATA_RDY, 0, 0);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_DATA_RDY, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for data_ready");
+        return -1;
+    }
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for data_ready");
+        return -1;
+    }
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in data ready. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return 0;
+        return -1;
     }
-    return (bool)data[1];
+    return data[1] & 0x01;
 }
 
-void scd30_read_measurement(scd30_dev_t *scd)
+esp_err_t scd30_read_measurement(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_READ_MEAS, 0, 0);
-    uint8_t data[18];
-    if (scd30_read(scd, data, 18) != ESP_OK)
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_READ_MEAS, 0, 0);
+    if (ret != ESP_OK)
     {
-        return;
-    };
+        ESP_LOGE(TAG, "Error sending command for read_measuremnt");
+        return ret;
+    }
+    uint8_t data[18];
+    ret = scd30_read(scd, data, 18);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for read_measuremnt");
+        return ret;
+    }
     for (uint8_t x = 2; x < 17; x += 3)
     {
         if (data[x] != scd30_crc(&data[x - 2], 2))
         {
             ESP_LOGE(TAG, "CRC mismatch in read measurement at position %d. Received: 0x%02x, calculated: 0x%02x", x, data[x], scd30_crc(&data[x - 2], 2));
-            return;
+            return ESP_FAIL;
         }
     }
     uint32_t co2_int = (uint32_t)(((uint32_t)data[0] << 24) |
@@ -137,9 +176,9 @@ void scd30_read_measurement(scd30_dev_t *scd)
                                    ((uint32_t)data[15] << 8) |
                                    ((uint32_t)data[16]));
 
-    ESP_LOGD(TAG, "Integer temperature: %d", t_int);
-    ESP_LOGD(TAG, "Integer humidity: %d", humi_int);
-    ESP_LOGD(TAG, "Integer CO2: %d", co2_int);
+    ESP_LOGD(TAG, "Integer temperature: %u", t_int);
+    ESP_LOGD(TAG, "Integer humidity: %u", humi_int);
+    ESP_LOGD(TAG, "Integer CO2: %u", co2_int);
 
     scd->temperature = *(float *)&t_int;
     scd->humidity = *(float *)&humi_int;
@@ -154,122 +193,184 @@ void scd30_read_measurement(scd30_dev_t *scd)
     ESP_LOGI(TAG, "CO2_ewma: %f ppm", scd->co2_ewma);
     ESP_LOGI(TAG, "******** End Sensirion SCD30 measurement ********");
     ESP_LOGI(TAG, "");
+
+    return ESP_OK;
 }
 
-void scd30_set_asc(scd30_dev_t *scd, bool enabled)
+esp_err_t scd30_set_asc(scd30_dev_t *scd, bool enabled)
 {
     uint8_t data[3];
     data[0] = 0;
     data[1] = enabled;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_ASC, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_ASC, data, 3);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error sending command for set_asc");
+    return ret;
 }
 
-bool scd30_get_asc(scd30_dev_t *scd)
+int8_t scd30_get_asc(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_ASC, 0, 0);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_ASC, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for get_asc");
+        return -1;
+    }
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for get_asc");
+        return -1;
+    }
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get ASC. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return false;
+        return -1;
     }
-    return (bool)data[1];
+    return data[1];
 }
 
-void scd30_set_frc(scd30_dev_t *scd, uint16_t frc_val)
+esp_err_t scd30_set_frc(scd30_dev_t *scd, uint16_t frc_val)
 {
     if ((frc_val < 400) | (frc_val > 2000))
     {
         ESP_LOGE(TAG, "FRC value out of range!");
-        return;
+        return ESP_FAIL;
     }
     uint8_t data[3];
     data[0] = frc_val >> 8;
     data[1] = frc_val & 0xFF;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_FRC, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_FRC, data, 3);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error sending command for set_frc");
+    return ret;
 }
 
-uint16_t scd30_get_frc(scd30_dev_t *scd)
+int16_t scd30_get_frc(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_FRC, 0, 0);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_FRC, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for get_frc");
+        return -1;
+    }
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for get_frc");
+        return ret;
+    }
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get FRC. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return 0;
+        return -1;
     }
-    return (uint16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
+    return (int16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
 }
 
-void scd30_set_temp_offset(scd30_dev_t *scd, float t_offset)
+esp_err_t scd30_set_temp_offset(scd30_dev_t *scd, float t_offset)
 {
     uint16_t offset = (uint16_t)(t_offset * 100);
     uint8_t data[3];
     data[0] = offset >> 8;
     data[1] = offset & 0xFF;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_TEMP_OFFSET, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_TEMP_OFFSET, data, 3);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error sending command for set_temp_offset");
+    return ret;
 }
 
 float scd30_get_temp_offset(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_TEMP_OFFSET, 0, 0);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_TEMP_OFFSET, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for get_temp_offset");
+        return -1;
+    }
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for get_temp_offset");
+        return -1;
+    }
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get temperature offset. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return 0;
+        return -1;
     }
     uint16_t offset = (uint16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
     ESP_LOGD(TAG, "Read temperature offset %d (int)", offset);
     return (float)offset / 100.0;
 }
 
-void scd30_set_altitude_comp(scd30_dev_t *scd, uint16_t altitude)
+esp_err_t scd30_set_altitude_comp(scd30_dev_t *scd, uint16_t altitude)
 {
     uint8_t data[3];
     data[0] = altitude >> 8;
     data[1] = altitude & 0xFF;
     data[2] = scd30_crc(data, 2);
-    scd30_write(scd, SCD30_CMD_ALTITUDE, data, 3);
+    esp_err_t ret = scd30_write(scd, SCD30_CMD_ALTITUDE, data, 3);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error sending command for set_altitude_comp");
+    return ret;
 }
 
-uint16_t scd30_get_altitude_comp(scd30_dev_t *scd)
+int16_t scd30_get_altitude_comp(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_ALTITUDE, 0, 0);
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_ALTITUDE, 0, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error sending command for get_alittude_comp");
+        return ret;
+    }
+
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading data for get_altitude_comp");
+        return ret;
+    }
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get altitude compensation. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
         return 0;
     }
-    uint16_t altitude = (uint16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
+    int16_t altitude = (int16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
     return altitude;
 }
 
-struct scd30_fw_ver scd30_get_fw_version(scd30_dev_t *scd)
+esp_err_t scd30_get_fw_version(scd30_dev_t *scd, scd30_fw_ver_t *fw)
 {
-    scd30_write(scd, SCD30_CMD_FW, 0, 0);
-    struct scd30_fw_ver fw = {
-        .major = 0,
-        .minor = 0,
-    };
+    esp_err_t ret;
+    ret = scd30_write(scd, SCD30_CMD_FW, 0, 0);
+    if (ret != ESP_OK)
+        return ret;
+
     uint8_t data[3];
-    scd30_read(scd, data, 3);
+    ret = scd30_read(scd, data, 3);
+    if (ret != ESP_OK)
+        return ret;
+
     if (data[2] != scd30_crc(data, 2))
     {
         ESP_LOGE(TAG, "CRC mismatch in get firmware version. Received: 0x%02x, calculated: 0x%02x", data[2], scd30_crc(data, 2));
-        return fw;
+        return ESP_FAIL;
     }
-    fw.major = data[0];
-    fw.minor = data[1];
-    return fw;
+    fw->major = data[0];
+    fw->minor = data[1];
+    return ESP_OK;
 }
 
 void scd30_print_config(scd30_dev_t *scd)
@@ -288,9 +389,9 @@ void scd30_print_config(scd30_dev_t *scd)
     ESP_LOGI(TAG, "******** End Sensirion SCD30 config ********");
 }
 
-void scd30_soft_reset(scd30_dev_t *scd)
+esp_err_t scd30_soft_reset(scd30_dev_t *scd)
 {
-    scd30_write(scd, SCD30_CMD_RESET, 0, 0);
+    return scd30_write(scd, SCD30_CMD_RESET, 0, 0);
 }
 
 float scd30_calculate_alpha(uint16_t interval, uint16_t t_cutoff)
@@ -313,10 +414,12 @@ esp_err_t scd30_write(scd30_dev_t *scd, uint16_t scd_cmd, void *data, size_t siz
         ESP_ERROR_CHECK(i2c_master_write(cmd, data, size, true)); // Data bytes
     }
     ESP_ERROR_CHECK(i2c_master_stop(cmd));
+
     esp_err_t ret = i2c_master_cmd_begin(scd->i2c_port, cmd, SCD30_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error reading from SCD30: %d %s", ret, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error writing command 0x%04x, data size: %d", scd_cmd, size);
     }
     i2c_cmd_link_delete(cmd);
     return ret;
@@ -332,9 +435,10 @@ esp_err_t scd30_read(scd30_dev_t *scd, void *data, size_t size)
     ESP_ERROR_CHECK(i2c_master_stop(cmd));
 
     esp_err_t ret = i2c_master_cmd_begin(scd->i2c_port, cmd, SCD30_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error reading from SCD30: %d %s", ret, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error reading from SCD30 data size: %d", size);
     }
     i2c_cmd_link_delete(cmd);
     return ret;

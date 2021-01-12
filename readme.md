@@ -3,8 +3,6 @@
 * (HW) Dodaj jumper za FRC enable/disable
 * (SW) LED matrix driver
 * (SW) NTP time
-* (SW) AP mode
-* (SW) Web server
 * (SW) Ubidots
 
 ### Notes:

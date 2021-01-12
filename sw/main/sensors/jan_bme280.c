@@ -1,4 +1,4 @@
-// #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include "jan_bme280.h"
 #include <stdint.h>
@@ -25,40 +25,208 @@
 
 static const char *TAG = "JAN_BME280";
 
-// static uint8_t BME280_I2C_ADDR;
-// static i2c_port_t BME280_I2C_PORT;
-
 esp_err_t bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data);
 esp_err_t bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data);
 esp_err_t bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size_t size);
-void bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig);
+esp_err_t bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig);
+esp_err_t bme280_check_chip_id(bme280_dev_t *bme);
+esp_err_t bme280_soft_reset(bme280_dev_t *bme);
+esp_err_t bme280_load_calib_data(bme280_dev_t *bme);
+esp_err_t bme280_set_ctrl_hum_register(bme280_dev_t *bme, bme280_oversampling_t osrs_hum);
+esp_err_t bme280_get_ctrl_hum_register(bme280_dev_t *bme, bme280_oversampling_t *osrs_hum);
+esp_err_t bme280_get_status_register(bme280_dev_t *bme, bme280_status_register_t *status);
+esp_err_t bme280_set_ctrl_meas_register(bme280_dev_t *bme, bme280_ctrl_meas_register_t *ctrl_meas);
+esp_err_t bme280_get_ctrl_meas_register(bme280_dev_t *bme, bme280_ctrl_meas_register_t *ctrl_meas);
+esp_err_t bme280_set_config_register(bme280_dev_t *bme, bme280_config_register_t *config);
+esp_err_t bme280_get_config_register(bme280_dev_t *bme, bme280_config_register_t *config);
+
 uint32_t bme280_compensate_temp(bme280_dev_t *bme, int32_t adc_temp, int32_t *t_fine);
 uint32_t bme280_compensate_pres(bme280_dev_t *bme, int32_t adc_p, int32_t t_fine);
 uint32_t bme280_compensate_humi(bme280_dev_t *bme, int32_t adc_h, int32_t t_fine);
 
-bme280_dev_t bme280_begin(uint8_t i2c_addr, i2c_port_t i2c_port)
+esp_err_t bme280_begin(bme280_dev_t *bme, bme280_params_t *params, uint8_t i2c_addr, i2c_port_t i2c_port)
 {
-    bme280_calib_data_t calib_data = {};
-    bme280_dev_t bme280 = {
-        .i2c_addr = i2c_addr,
-        .i2c_port = i2c_port,
-        .calib_data = calib_data,
-    };
-    ESP_LOGI(TAG, "Reading BME280 chip ID...");
-    uint8_t chip_id;
-    bme280_read_register(&bme280, BME280_REG_ID, &chip_id);
-    if (chip_id == 0x60)
-        ESP_LOGI(TAG, "Chip ID: 0x%02x", chip_id);
-    else
-        ESP_LOGE(TAG, "Wrong chip ID: 0x%02x", chip_id);
-    bme280_soft_reset(&bme280);
-    return bme280;
+    esp_err_t ret;
+
+    bme->i2c_addr = i2c_addr;
+    bme->i2c_port = i2c_port;
+
+    // Check chip ID
+    ret = bme280_check_chip_id(bme);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        return ret;
+
+    // Perform soft reset
+    ret = bme280_soft_reset(bme);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    vTaskDelay(5 / portTICK_PERIOD_MS); // Wait for BME to power on
+
+    // Load calibration data
+    ret = bme280_load_calib_data(bme);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        return ret;
+
+    // Set the parameters
+    ret = bme280_set_params(bme, params);
+    if (ret != ESP_OK)
+        return ret;
+
+    return ret;
 };
 
-void bme280_soft_reset(bme280_dev_t *bme)
+esp_err_t bme280_check_chip_id(bme280_dev_t *bme)
 {
-    ESP_LOGI(TAG, "Soft reseting BME280...");
-    bme280_write_register(bme, BME280_REG_RESET, 0xB6);
+    uint8_t chip_id;
+    esp_err_t ret = bme280_read_register(bme, BME280_REG_ID, &chip_id);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading chip ID");
+        return ret;
+    }
+    if (chip_id == 0x60)
+    {
+        ESP_LOGD(TAG, "Correct chip ID: 0x%02x", chip_id);
+        return ESP_OK;
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Wrong chip ID: 0x%02x", chip_id);
+        return ESP_FAIL;
+    }
+}
+
+esp_err_t bme280_soft_reset(bme280_dev_t *bme)
+{
+    ESP_LOGD(TAG, "Soft reseting BME280...");
+    esp_err_t ret = bme280_write_register(bme, BME280_REG_RESET, 0xB6);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reseting BME280");
+    }
+    return ret;
+}
+
+esp_err_t bme280_set_ctrl_hum_register(bme280_dev_t *bme, bme280_oversampling_t osrs_hum)
+{
+    uint8_t reg = (osrs_hum & 0x07);
+    esp_err_t ret = bme280_write_register(bme, BME280_REG_CTRL_HUM, reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error setting ctrl_hum register");
+    else
+        ESP_LOGD(TAG, "Successfully set ctrl_hum register to 0x%02x", reg);
+    return ret;
+}
+
+esp_err_t bme280_get_ctrl_hum_register(bme280_dev_t *bme, bme280_oversampling_t *osrs_hum)
+{
+    uint8_t reg = 0;
+    esp_err_t ret = bme280_read_register(bme, BME280_REG_CTRL_HUM, &reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading ctrl_hum register");
+        return ret;
+    }
+    else
+    {
+        ESP_LOGD(TAG, "Successfully read ctrl_hum register: 0x%02x", reg);
+        *osrs_hum = reg & 0x07;
+        return ret;
+    }
+}
+
+esp_err_t bme280_get_status_register(bme280_dev_t *bme, bme280_status_register_t *status)
+{
+    uint8_t reg = 0;
+    esp_err_t ret = bme280_read_register(bme, BME280_REG_STATUS, &reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading status register");
+        return ret;
+    }
+    else
+    {
+        ESP_LOGD(TAG, "Successfully read status register: 0x%02x", reg);
+        status->measuring = (reg >> 3) & 0x01;
+        status->im_update = reg & 0x01;
+        return ret;
+    }
+}
+
+esp_err_t bme280_set_ctrl_meas_register(bme280_dev_t *bme, bme280_ctrl_meas_register_t *ctrl_meas)
+{
+    uint8_t reg = 0;
+    reg |= ((ctrl_meas->osrs_temp & 0x07) << 5);
+    reg |= ((ctrl_meas->osrs_pres & 0x07) << 2);
+    reg |= ((ctrl_meas->mode & 0x03));
+
+    esp_err_t ret = bme280_write_register(bme, BME280_REG_CTRL_MEAS, reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error setting ctrl_meas register");
+    else
+        ESP_LOGD(TAG, "Successfully set ctrl_meas register to 0x%02x", reg);
+    return ret;
+}
+
+esp_err_t bme280_get_ctrl_meas_register(bme280_dev_t *bme, bme280_ctrl_meas_register_t *ctrl_meas)
+{
+    uint8_t reg = 0;
+    esp_err_t ret = bme280_read_register(bme, BME280_REG_CTRL_MEAS, &reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading ctrl_meas register");
+        return ret;
+    }
+    else
+    {
+        ESP_LOGD(TAG, "Successfully read ctrl_meas register: 0x%02x", reg);
+        ctrl_meas->osrs_temp = (reg >> 5) & 0x07;
+        ctrl_meas->osrs_pres = (reg >> 2) & 0x07;
+        ctrl_meas->mode = reg & 0x03;
+        return ret;
+    }
+}
+
+esp_err_t bme280_set_config_register(bme280_dev_t *bme, bme280_config_register_t *config)
+{
+    uint8_t reg = 0;
+    reg |= ((config->t_sb & 0x07) << 5);       // Set standby time (bits 7,6,5)
+    reg |= ((config->iir_filter & 0x07) << 2); // Set IIR filter (bits 4,3,2)
+    reg &= 0b11111100;                         // Disable SPI
+
+    esp_err_t ret = bme280_write_register(bme, BME280_REG_CONFIG, reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error setting config register");
+    else
+        ESP_LOGD(TAG, "Successfully set config register to 0x%02x", reg);
+    return ret;
+}
+
+esp_err_t bme280_get_config_register(bme280_dev_t *bme, bme280_config_register_t *config)
+{
+    uint8_t reg = 0;
+    esp_err_t ret = bme280_read_register(bme, BME280_REG_CONFIG, &reg);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading config register");
+        return ret;
+    }
+
+    ESP_LOGD(TAG, "Successfully read config register: 0x%02x", reg);
+    config->t_sb = (reg >> 5) & 0x07;
+    config->iir_filter = (reg >> 2) & 0x07;
+    config->spi3w_en = reg & 0x03;
+    return ret;
 }
 
 void bme280_default_params(bme280_params_t *params)
@@ -71,59 +239,80 @@ void bme280_default_params(bme280_params_t *params)
     params->oversampling_humi = BME280_SAMPLING_X4;
 }
 
-void bme280_set_params(bme280_dev_t *bme, bme280_params_t *params)
+esp_err_t bme280_set_params(bme280_dev_t *bme, bme280_params_t *params)
 {
+    esp_err_t ret;
 
     // Config register
-    uint8_t reg_config = 0;
-    reg_config |= ((params->standby_time & 0x07) << 5); // Set standby time (bits 7,6,5)
-    reg_config |= ((params->iir_filter & 0x07) << 2);   // Set IIR filter (bits 4,3,2)
-    reg_config &= 0b11111100;                           // Disable SPI
-    ESP_LOGD(TAG, "Writing value 0x%02x to config register", reg_config);
-    bme280_write_register(bme, BME280_REG_CONFIG, reg_config);
+    bme280_config_register_t config;
+    config.t_sb = params->standby_time;
+    config.iir_filter = params->iir_filter;
+    config.spi3w_en = 0;
+    ret = bme280_set_config_register(bme, &config);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error setting parameters");
+        return ret;
+    }
 
     // Ctrl_hum register
-    uint8_t reg_ctrl_hum = (params->oversampling_humi & 0x07);
-    ESP_LOGD(TAG, "Writing value 0x%02x to ctrl_hum register", reg_ctrl_hum);
-    bme280_write_register(bme, BME280_REG_CTRL_HUM, reg_ctrl_hum);
+    ret = bme280_set_ctrl_hum_register(bme, params->oversampling_humi);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error setting parameters");
+        return ret;
+    }
 
     // Ctrl_meas register
-    uint8_t reg_ctrl_meas = 0;
-    reg_ctrl_meas |= ((params->oversampling_temp & 0x07) << 5);
-    reg_ctrl_meas |= ((params->oversampling_pres & 0x07) << 2);
-    reg_ctrl_meas |= ((params->mode & 0x03));
-    ESP_LOGD(TAG, "Writing value 0x%02x to ctrl_meas register", reg_ctrl_meas);
-    bme280_write_register(bme, BME280_REG_CTRL_MEAS, reg_ctrl_meas);
+    bme280_ctrl_meas_register_t ctrl_meas;
+    ctrl_meas.osrs_temp = params->oversampling_temp;
+    ctrl_meas.osrs_pres = params->oversampling_pres;
+    ctrl_meas.mode = params->mode;
+    ret = bme280_set_ctrl_meas_register(bme, &ctrl_meas);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error setting parameters");
+        return ret;
+    }
+    ESP_LOGI(TAG, "Successfully set BME280 params");
+    return ret;
 }
 
-void bme280_measurement(bme280_dev_t *bme)
+esp_err_t bme280_measurement(bme280_dev_t *bme)
 {
-    uint8_t data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    esp_err_t ret;
+    uint8_t data[8] = {};
     int32_t adc_temp, adc_pres, adc_humi, t_fine;
 
     // Check the current sensor mode
-    uint8_t ctrl_meas;
-    bme280_read_register(bme, BME280_REG_CTRL_MEAS, &ctrl_meas);
-    if ((ctrl_meas & 0x03) == 0)
+    bme280_ctrl_meas_register_t ctrl_meas;
+    ret = bme280_get_ctrl_meas_register(bme, &ctrl_meas);
+    if (ret != ESP_OK)
+        return ret;
+    if (ctrl_meas.mode == BME280_MODE_SLEEP)
     {
         // If in sleep mode, do forced measurement
-        uint8_t new_ctrl_meas = (ctrl_meas & 0b11111100) | (BME280_MODE_FORCED & 0x03);
-        ESP_LOGD(TAG, "In sleep mode. Writing 0x%02x to ctrl_meas to enter forced mode", new_ctrl_meas);
-        bme280_write_register(bme, BME280_REG_CTRL_MEAS, new_ctrl_meas);
+        ctrl_meas.mode = BME280_MODE_FORCED;
+        ESP_LOGI(TAG, "In sleep mode. Performing forced measurement");
+        bme280_set_ctrl_meas_register(bme, &ctrl_meas);
     }
 
     // Check the status registers. Wait until measurement is complete
-    uint8_t status;
-    bme280_read_register(bme, BME280_REG_STATUS, &status);
-    while (status & 0x09)
+    bme280_status_register_t status;
+    ESP_ERROR_CHECK(bme280_get_status_register(bme, &status));
+
+    while (status.measuring || status.im_update)
     {
-        ESP_LOGD(TAG, "Waiting for status register to clear. Current value: 0x%02x", status & 0x09);
+        ESP_LOGD(TAG, "Waiting for status register to clear...");
         vTaskDelay(1 / portTICK_PERIOD_MS);
-        bme280_read_register(bme, BME280_REG_STATUS, &status);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(bme280_get_status_register(bme, &status));
     }
 
     // Burst read all the measurement registers
-    bme280_read_registers(bme, BME280_REG_PRESS_MSB, data, 8);
+    ret = bme280_read_registers(bme, BME280_REG_PRESS_MSB, data, 8);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        return ret;
 
     adc_pres = data[0] << 12 | data[1] << 4 | data[2] >> 4;
     ESP_LOGD(TAG, "Read ADC pressure: %d", adc_pres);
@@ -154,6 +343,8 @@ void bme280_measurement(bme280_dev_t *bme)
     ESP_LOGI(TAG, "Pressure: %f Pa", bme->pressure);
     ESP_LOGI(TAG, "******** End Bosch BME280 measurement ********");
     ESP_LOGI(TAG, "");
+
+    return ret;
 }
 
 uint32_t bme280_compensate_temp(bme280_dev_t *bme, int32_t adc_temp, int32_t *t_fine)
@@ -204,84 +395,23 @@ uint32_t bme280_compensate_humi(bme280_dev_t *bme, int32_t adc_hum, int32_t t_fi
     return (uint32_t)v_x1_u32r >> 12;
 }
 
-void bme280_load_calib_data(bme280_dev_t *bme)
-{
-    ESP_LOGD(TAG, "Reading calibration data...");
-
-    bme280_read_cal_dig(bme, 0x88, &bme->calib_data.dig_T1);
-    ESP_LOGD(TAG, "DIG_T1: %d", bme->calib_data.dig_T1);
-
-    bme280_read_cal_dig(bme, 0x8A, (uint16_t *)&bme->calib_data.dig_T2);
-    ESP_LOGD(TAG, "DIG_T2: %d", bme->calib_data.dig_T2);
-
-    bme280_read_cal_dig(bme, 0x8C, (uint16_t *)&bme->calib_data.dig_T3);
-    ESP_LOGD(TAG, "DIG_T3: %d", bme->calib_data.dig_T3);
-
-    bme280_read_cal_dig(bme, 0x8E, &bme->calib_data.dig_P1);
-    ESP_LOGD(TAG, "DIG_P1: %d", bme->calib_data.dig_P1);
-
-    bme280_read_cal_dig(bme, 0x90, (uint16_t *)&bme->calib_data.dig_P2);
-    ESP_LOGD(TAG, "DIG_P2: %d", bme->calib_data.dig_P2);
-
-    bme280_read_cal_dig(bme, 0x92, (uint16_t *)&bme->calib_data.dig_P3);
-    ESP_LOGD(TAG, "DIG_P3: %d", bme->calib_data.dig_P3);
-
-    bme280_read_cal_dig(bme, 0x94, (uint16_t *)&bme->calib_data.dig_P4);
-    ESP_LOGD(TAG, "DIG_P4: %d", bme->calib_data.dig_P4);
-
-    bme280_read_cal_dig(bme, 0x96, (uint16_t *)&bme->calib_data.dig_P5);
-    ESP_LOGD(TAG, "DIG_P5: %d", bme->calib_data.dig_P5);
-
-    bme280_read_cal_dig(bme, 0x98, (uint16_t *)&bme->calib_data.dig_P6);
-    ESP_LOGD(TAG, "DIG_P6: %d", bme->calib_data.dig_P6);
-
-    bme280_read_cal_dig(bme, 0x9A, (uint16_t *)&bme->calib_data.dig_P7);
-    ESP_LOGD(TAG, "DIG_P7: %d", bme->calib_data.dig_P7);
-
-    bme280_read_cal_dig(bme, 0x9C, (uint16_t *)&bme->calib_data.dig_P8);
-    ESP_LOGD(TAG, "DIG_P8: %d", bme->calib_data.dig_P8);
-
-    bme280_read_cal_dig(bme, 0x9E, (uint16_t *)&bme->calib_data.dig_P9);
-    ESP_LOGD(TAG, "DIG_P9: %d", bme->calib_data.dig_P9);
-
-    bme280_read_register(bme, 0xA1, &bme->calib_data.dig_H1);
-    ESP_LOGD(TAG, "DIG_H1: %d", bme->calib_data.dig_H1);
-
-    bme280_read_cal_dig(bme, 0xE1, (uint16_t *)&bme->calib_data.dig_H2);
-    ESP_LOGD(TAG, "DIG_H2: %d", bme->calib_data.dig_H2);
-
-    bme280_read_register(bme, 0xE3, &bme->calib_data.dig_H3);
-    ESP_LOGD(TAG, "DIG_H3: %d", bme->calib_data.dig_H3);
-
-    uint8_t dig_h45[3] = {0, 0, 0};
-    bme280_read_registers(bme, 0xE4, &dig_h45, 3);
-
-    bme->calib_data.dig_H4 = (((uint16_t)dig_h45[0]) << 4) | (dig_h45[1] & 0x0F);
-    ESP_LOGD(TAG, "DIG_H4: %d", bme->calib_data.dig_H4);
-
-    bme->calib_data.dig_H5 = (((uint16_t)dig_h45[2]) << 4) | ((dig_h45[1] & 0xF0) >> 4);
-    ESP_LOGD(TAG, "DIG_H5: %d", bme->calib_data.dig_H5);
-
-    bme280_read_register(bme, 0xE7, (uint8_t *)&bme->calib_data.dig_H6);
-    ESP_LOGD(TAG, "DIG_H6: %d", bme->calib_data.dig_H6);
-}
-
 esp_err_t bme280_read_register(bme280_dev_t *bme, uint8_t reg, uint8_t *data)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
-    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                               // Produce start conditon
+    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                     // Produce start conditon
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, true)); // Select I2C device
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, true));                                     // Write the register address to be read later
 
-    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                              // Repeated start condition
+    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                    // Repeated start condition
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, true)); // Select I2C device
-    ESP_ERROR_CHECK(i2c_master_read_byte(cmd, data, I2C_MASTER_NACK));                                   // Read the data from device
-    ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                               // Stop conditon
+    ESP_ERROR_CHECK(i2c_master_read_byte(cmd, data, I2C_MASTER_NACK));                         // Read the data from device
+    ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                     // Stop conditon
     esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error reading register 0x%02x", reg);
     }
     i2c_cmd_link_delete(cmd);
     return ret;
@@ -296,9 +426,10 @@ esp_err_t bme280_write_register(bme280_dev_t *bme, uint8_t reg, uint8_t data)
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, data, true));                                    // Write the data
     ESP_ERROR_CHECK(i2c_master_stop(cmd));
     esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error writing register 0x%02x with data 0x%02x", reg, data);
     }
     i2c_cmd_link_delete(cmd);
     return ret;
@@ -308,26 +439,195 @@ esp_err_t bme280_read_registers(bme280_dev_t *bme, uint8_t reg, void *data, size
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
-    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                               // Produce start conditon
+    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                     // Produce start conditon
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_WRITE, true)); // Select I2C device
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, reg, true));                                     // Write the register address to be read later
 
-    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                              // Repeated start condition
+    ESP_ERROR_CHECK(i2c_master_start(cmd));                                                    // Repeated start condition
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, (bme->i2c_addr << 1) | I2C_MASTER_READ, true)); // Select I2C device
-    ESP_ERROR_CHECK(i2c_master_read(cmd, data, size, I2C_MASTER_LAST_NACK));                             // Read the data from device
-    ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                               // Stop conditon
+    ESP_ERROR_CHECK(i2c_master_read(cmd, data, size, I2C_MASTER_LAST_NACK));                   // Read the data from device
+    ESP_ERROR_CHECK(i2c_master_stop(cmd));                                                     // Stop conditon
     esp_err_t ret = i2c_master_cmd_begin(bme->i2c_port, cmd, BME280_I2C_TIMEOUT / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error reading register from BME280: %d %s", ret, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error reading registers starting from register: 0x%02x, read size: %d", reg, size);
     }
     i2c_cmd_link_delete(cmd);
     return ret;
 }
 
-void bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig)
+esp_err_t bme280_read_cal_dig(bme280_dev_t *bme, uint8_t reg, uint16_t *dig)
 {
     uint8_t tmp[2] = {0, 0};
-    bme280_read_registers(bme, reg, tmp, 2);
+    esp_err_t ret = bme280_read_registers(bme, reg, tmp, 2);
     *dig = tmp[0] | (tmp[1] << 8);
+    return ret;
+}
+
+esp_err_t bme280_load_calib_data(bme280_dev_t *bme)
+{
+    ESP_LOGI(TAG, "Reading BME280 calibration data...");
+    esp_err_t ret;
+
+    ret = bme280_read_cal_dig(bme, 0x88, &bme->calib_data.dig_T1);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_T1: %d", bme->calib_data.dig_T1);
+
+    ret = bme280_read_cal_dig(bme, 0x8A, (uint16_t *)&bme->calib_data.dig_T2);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_T2: %d", bme->calib_data.dig_T2);
+
+    ret = bme280_read_cal_dig(bme, 0x8C, (uint16_t *)&bme->calib_data.dig_T3);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_T3: %d", bme->calib_data.dig_T3);
+
+    ret = bme280_read_cal_dig(bme, 0x8E, &bme->calib_data.dig_P1);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P1: %d", bme->calib_data.dig_P1);
+
+    ret = bme280_read_cal_dig(bme, 0x90, (uint16_t *)&bme->calib_data.dig_P2);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P2: %d", bme->calib_data.dig_P2);
+
+    ret = bme280_read_cal_dig(bme, 0x92, (uint16_t *)&bme->calib_data.dig_P3);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P3: %d", bme->calib_data.dig_P3);
+
+    ret = bme280_read_cal_dig(bme, 0x94, (uint16_t *)&bme->calib_data.dig_P4);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P4: %d", bme->calib_data.dig_P4);
+
+    ret = bme280_read_cal_dig(bme, 0x96, (uint16_t *)&bme->calib_data.dig_P5);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P5: %d", bme->calib_data.dig_P5);
+
+    ret = bme280_read_cal_dig(bme, 0x98, (uint16_t *)&bme->calib_data.dig_P6);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P6: %d", bme->calib_data.dig_P6);
+
+    ret = bme280_read_cal_dig(bme, 0x9A, (uint16_t *)&bme->calib_data.dig_P7);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P7: %d", bme->calib_data.dig_P7);
+
+    ret = bme280_read_cal_dig(bme, 0x9C, (uint16_t *)&bme->calib_data.dig_P8);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P8: %d", bme->calib_data.dig_P8);
+
+    ret = bme280_read_cal_dig(bme, 0x9E, (uint16_t *)&bme->calib_data.dig_P9);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_P9: %d", bme->calib_data.dig_P9);
+
+    ret = bme280_read_register(bme, 0xA1, &bme->calib_data.dig_H1);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_H1: %d", bme->calib_data.dig_H1);
+
+    ret = bme280_read_cal_dig(bme, 0xE1, (uint16_t *)&bme->calib_data.dig_H2);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_H2: %d", bme->calib_data.dig_H2);
+
+    ret = bme280_read_register(bme, 0xE3, &bme->calib_data.dig_H3);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_H3: %d", bme->calib_data.dig_H3);
+
+    uint8_t dig_h45[3] = {0, 0, 0};
+    ret = bme280_read_registers(bme, 0xE4, &dig_h45, 3);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+
+    bme->calib_data.dig_H4 = (((uint16_t)dig_h45[0]) << 4) | (dig_h45[1] & 0x0F);
+    ESP_LOGD(TAG, "DIG_H4: %d", bme->calib_data.dig_H4);
+
+    bme->calib_data.dig_H5 = (((uint16_t)dig_h45[2]) << 4) | ((dig_h45[1] & 0xF0) >> 4);
+    ESP_LOGD(TAG, "DIG_H5: %d", bme->calib_data.dig_H5);
+
+    ret = bme280_read_register(bme, 0xE7, (uint8_t *)&bme->calib_data.dig_H6);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading calibration digit");
+        return ret;
+    }
+    ESP_LOGD(TAG, "DIG_H6: %d", bme->calib_data.dig_H6);
+
+    return ESP_OK;
 }

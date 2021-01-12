@@ -44,6 +44,26 @@ typedef enum bme280_standby
     BME280_STANDBY_MS_1000 = 0b101
 } bme280_standby_t;
 
+typedef struct bme280_config_register
+{
+    bme280_standby_t t_sb;
+    bme280_iir_filter_t iir_filter;
+    bool spi3w_en;
+} bme280_config_register_t;
+
+typedef struct bme280_ctrl_meas_register
+{
+    bme280_oversampling_t osrs_temp;
+    bme280_oversampling_t osrs_pres;
+    bme280_mode_t mode;
+} bme280_ctrl_meas_register_t;
+
+typedef struct bme280_status_register
+{
+    bool measuring;
+    bool im_update;
+} bme280_status_register_t;
+
 typedef struct bme280_params
 {
     bme280_mode_t mode;
@@ -86,10 +106,9 @@ typedef struct bme280_dev
     float pressure;
 } bme280_dev_t;
 
-bme280_dev_t bme280_begin(uint8_t i2c_addr, i2c_port_t i2c_port);
-void bme280_load_calib_data(bme280_dev_t *bme);
-void bme280_soft_reset(bme280_dev_t *bme);
+esp_err_t bme280_begin(bme280_dev_t *bme, bme280_params_t *params, uint8_t i2c_addr, i2c_port_t i2c_port);
 void bme280_default_params(bme280_params_t *params);
-void bme280_set_params(bme280_dev_t *bme, bme280_params_t *params);
-void bme280_measurement(bme280_dev_t *bme);
+esp_err_t bme280_set_params(bme280_dev_t *bme, bme280_params_t *params);
+esp_err_t bme280_measurement(bme280_dev_t *bme);
+
 #endif

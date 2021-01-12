@@ -37,13 +37,6 @@ void initialize_mdns(void)
     mdns_hostname_set(APP_MDNS_HOSTNAME);
     mdns_instance_name_set(APP_MDNS_INSTANCE_NAME);
 
-    // mdns_txt_item_t serviceTxtData[] = {
-    //     {"board", "esp32"},
-    //     {"path", "/"}};
-
-    // ESP_ERROR_CHECK(mdns_service_add("ESP32-WebServer", "_http", "_tcp", 80, serviceTxtData,
-    //                                  sizeof(serviceTxtData) / sizeof(serviceTxtData[0])));
-
     netbiosns_init();
     netbiosns_set_name(APP_MDNS_HOSTNAME);
 }
@@ -54,15 +47,7 @@ void app_main(void)
     esp_err_t ret;
 
     //Initialize NVS
-    ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    // nvs_set_wifi_ssid_pass("wifi4", "vsegrepozraku");
+    nvs_init();
 
     // WiFi configuration
     esp_netif_t *netif;
@@ -70,6 +55,12 @@ void app_main(void)
     char pass[64];
     bool connected = false;
     ret = nvs_get_wifi_ssid_pass(ssid, pass);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (strlen(ssid) == 0 || strlen(pass) == 0)
+    {
+        ESP_LOGE(TAG, "Wifi SSID/pass is 0 length! Using AP mode...");
+        ret = ESP_FAIL;
+    }
     if (ret == ESP_OK)
     {
         netif = wifi_init_sta(ssid, pass, &connected);
@@ -98,52 +89,66 @@ void app_main(void)
     i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
 
     // BME280 configuration
-    bme280_dev_t bme280 = bme280_begin(BME280_I2C_ADDRESS, I2C_NUM_0);
-    bme280_load_calib_data(&bme280);
-    bme280_params_t bme280_params = {
-        .mode = BME280_MODE_FORCED,
-        .standby_time = BME280_STANDBY_MS_1000,
-        .iir_filter = BME280_FILTER_X16,
-        .oversampling_temp = BME280_SAMPLING_X4,
-        .oversampling_pres = BME280_SAMPLING_X4,
-        .oversampling_humi = BME280_SAMPLING_X4};
-    bme280_set_params(&bme280, &bme280_params);
+    bme280_dev_t bme280;
+    bme280_params_t bme280_params;
+    bme280_default_params(&bme280_params);
+    bme280_params.iir_filter = BME280_FILTER_X16;
+    bme280_params.mode = BME280_MODE_NORMAL;
+    bme280_params.standby_time = BME280_STANDBY_MS_1000;
+    ret = bme280_begin(&bme280, &bme280_params, BME280_I2C_ADDRESS, I2C_NUM_0);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error initializing BME280");
 
     // SCD30 configuration
+    scd30_dev_t scd30;
+    ret = scd30_begin(&scd30, I2C_NUM_0, 3, 30);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+        ESP_LOGE(TAG, "Error initializing SCD30");
+    ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_set_altitude_comp(&scd30, 300));
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_set_temp_offset(&scd30, 0));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_start_measurement(&scd30, 0));
 
-    scd30_dev_t scd30 = scd30_begin(I2C_NUM_0, 3, 30);
-    scd30_set_altitude_comp(&scd30, 300);
-    scd30_start_measurement(&scd30, 0);
     // VEML7700 configuration
-    veml7700_dev_t veml = veml7700_begin(I2C_NUM_0, true);
-    // veml7700_set_params(&veml, VEML_GAIN_x1, VEML_IT_800_MS);
+    veml7700_dev_t veml;
+    veml7700_begin(&veml, I2C_NUM_0, true);
 
     // Web app configuration
     // httpd_handle_t server = NULL;
-    web_app_init(netif, &bme280, &scd30, &veml);
+    ret = web_app_init(netif, &bme280, &scd30, &veml);
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Successfully started HTTP server");
+    }
 
+    uint32_t count = 0;
+    int8_t data_ready = 0;
     // Loop
     while (1)
     {
-        vTaskDelay(6000 / portTICK_PERIOD_MS);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "Measurement count: %d", count);
 
-        bme280_measurement(&bme280);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(bme280_measurement(&bme280));
 
-        while (!scd30_data_ready(&scd30))
+        ESP_ERROR_CHECK_WITHOUT_ABORT(veml7700_read_als(&veml));
+
+        data_ready = scd30_data_ready(&scd30);
+        while (data_ready != 1)
         {
             printf("Waiting for SCD30 data ready...");
             vTaskDelay(100 / portTICK_PERIOD_MS);
+            if (data_ready < 0)
+            {
+                ESP_LOGE(TAG, "SCD30 data_ready=-1");
+            }
+            data_ready = scd30_data_ready(&scd30);
         }
-        scd30_read_measurement(&scd30);
-        scd30_start_measurement(&scd30, bme280.pressure / 100);
-        float offset = scd30.temperature - bme280.temperature;
-        if (offset > 0)
-        {
-            scd30_set_temp_offset(&scd30, offset);
-        }
-        // vTaskDelay(200 / portTICK_PERIOD_MS);
-        // scd30_print_config(&scd30);
-        veml7700_read_als(&veml);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_read_measurement(&scd30));
+
+        count++;
     }
 
     i2c_driver_delete(I2C_NUM_0);

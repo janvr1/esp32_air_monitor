@@ -7,8 +7,10 @@
 #include <esp_spiffs.h>
 #include <fcntl.h>
 #include <cJSON.h>
+#include <math.h>
 
 #include "../sensors/jan_scd30.h"
+#include "../jan_nvs.h"
 
 #define CHECK_FILE_EXTENSION(filename, ext) (strcasecmp(&filename[strlen(filename) - strlen(ext)], ext) == 0)
 
@@ -20,6 +22,10 @@ esp_err_t spiffs_init();
 static esp_err_t get_file_handler(httpd_req_t *req);
 static esp_err_t get_measurement_handler(httpd_req_t *req);
 static esp_err_t get_info_handler(httpd_req_t *req);
+static esp_err_t post_dev_info_handler(httpd_req_t *req);
+static esp_err_t post_wifi_handler(httpd_req_t *req);
+static esp_err_t post_scd_asc_handler(httpd_req_t *req);
+static esp_err_t post_scd_frc_handler(httpd_req_t *req);
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath);
 
 esp_err_t web_app_init(esp_netif_t *netif,
@@ -74,11 +80,35 @@ esp_err_t web_app_init(esp_netif_t *netif,
         .user_ctx = web_ctx};
     httpd_register_uri_handler(server, &get_info_uri);
 
-    httpd_uri_t get_file_uri = {
-        .uri = "/*",
-        .method = HTTP_GET,
-        .handler = get_file_handler,
+    httpd_uri_t post_info_uri = {
+        .uri = "/api/dev_info",
+        .method = HTTP_POST,
+        .handler = post_dev_info_handler,
         .user_ctx = NULL};
+    httpd_register_uri_handler(server, &post_info_uri);
+
+    httpd_uri_t post_wifi_uri = {
+        .uri = "/api/wifi",
+        .method = HTTP_POST,
+        .handler = post_wifi_handler,
+        .user_ctx = NULL};
+    httpd_register_uri_handler(server, &post_wifi_uri);
+
+    httpd_uri_t post_scd_asc_uri = {
+        .uri = "/api/scd_asc",
+        .method = HTTP_POST,
+        .handler = post_scd_asc_handler,
+        .user_ctx = web_ctx};
+    httpd_register_uri_handler(server, &post_scd_asc_uri);
+
+    httpd_uri_t post_scd_frc_uri = {
+        .uri = "/api/scd_frc",
+        .method = HTTP_POST,
+        .handler = post_scd_frc_handler,
+        .user_ctx = web_ctx};
+    httpd_register_uri_handler(server, &post_scd_frc_uri);
+
+    httpd_uri_t get_file_uri = {.uri = "/*", .method = HTTP_GET, .handler = get_file_handler, .user_ctx = NULL};
     httpd_register_uri_handler(server, &get_file_uri);
 
     return ESP_OK;
@@ -91,17 +121,306 @@ void web_app_stop(httpd_handle_t *server)
     httpd_stop(server);
 }
 
+static esp_err_t post_scd_frc_handler(httpd_req_t *req)
+{
+    char *buf = malloc(32);
+    esp_err_t ret = httpd_req_get_url_query_str(req, buf, 32);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error getting the query string");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to parse query string");
+        free(buf);
+        return ESP_FAIL;
+    }
+    ESP_LOGD(TAG, "Parsed URL query: %s", buf);
+    char *val = malloc(6);
+    ret = httpd_query_key_value(buf, "ref", val, 6);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error getting the query string");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to get query value");
+        free(buf);
+        free(val);
+        return ESP_FAIL;
+    }
+    ESP_LOGD(TAG, "Parsed query value: %s", val);
+    free(buf);
+
+    int ref_val = strtol(val, NULL, 10);
+    ESP_LOGD(TAG, "Parsed FRC value: %d", ref_val);
+
+    free(val);
+    web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
+    ret = scd30_set_frc(ctx->scd, ref_val);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error performing FRC");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Error: Failed to perform FRC");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "Success: SCD calibrated");
+
+    return ESP_OK;
+}
+
+static esp_err_t post_scd_asc_handler(httpd_req_t *req)
+{
+    char *buf = malloc(32);
+    esp_err_t ret = httpd_req_get_url_query_str(req, buf, 32);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error getting the query string");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to parse query string");
+        free(buf);
+        return ESP_FAIL;
+    }
+    ESP_LOGD(TAG, "Parsed URL query: %s", buf);
+    char *val = malloc(2);
+    ret = httpd_query_key_value(buf, "enable", val, 2);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error getting the query string");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to get query value");
+        free(buf);
+        free(val);
+        return ESP_FAIL;
+    }
+    ESP_LOGD(TAG, "Parsed query value: %s", val);
+
+    free(buf);
+    bool asc = false;
+    if (val[0] == '1')
+        asc = true;
+    else if (val[0] == '0')
+        asc = false;
+    else
+    {
+        ESP_LOGE(TAG, "Invalid query string");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Invalid query string");
+        return ESP_FAIL;
+    }
+    free(val);
+    web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
+    ret = scd30_set_asc(ctx->scd, asc);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error enabling SCD30 ASC");
+        if (asc)
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Error: Failed to enable ASC");
+        else
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Error: Failed to disable ASC");
+        return ESP_FAIL;
+    }
+
+    if (asc)
+        httpd_resp_sendstr(req, "Success: ASC enabled");
+    else
+        httpd_resp_sendstr(req, "Success: ASC disabled");
+
+    return ESP_OK;
+}
+
+static esp_err_t post_wifi_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    int cur_len = 0;
+    char *buf = malloc(512);
+    int received = 0;
+    if (total_len >= 512)
+    {
+        /* Respond with 500 Internal Server Error */
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
+        free(buf);
+        return ESP_FAIL;
+    }
+    while (cur_len < total_len)
+    {
+        received = httpd_req_recv(req, buf + cur_len, total_len);
+        if (received <= 0)
+        {
+            /* Respond with 500 Internal Server Error */
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post device info");
+            free(buf);
+            return ESP_FAIL;
+        }
+        cur_len += received;
+    }
+    buf[total_len] = '\0';
+    ESP_LOGD(TAG, "Received post_wifi: %s", buf);
+
+    esp_err_t ret;
+    cJSON *json = cJSON_Parse(buf);
+
+    if (strlen(cJSON_GetObjectItem(json, "ssid")->valuestring) > 63)
+    {
+        ESP_LOGE(TAG, "Error: WiFi SSID too long");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi SSID too long");
+        cJSON_Delete(json);
+        free(buf);
+        return ESP_FAIL;
+    }
+
+    if (strlen(cJSON_GetObjectItem(json, "pass")->valuestring) > 63)
+    {
+        ESP_LOGE(TAG, "Error: WiFi password too long");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi password too long");
+        cJSON_Delete(json);
+        free(buf);
+        return ESP_FAIL;
+    }
+
+    if (cJSON_HasObjectItem(json, "ssid") && cJSON_HasObjectItem(json, "pass"))
+    {
+        ESP_LOGI(TAG, "Updating wifi ssid and password");
+
+        ret = nvs_set_wifi_ssid_pass(cJSON_GetObjectItem(json, "ssid")->valuestring, cJSON_GetObjectItem(json, "pass")->valuestring);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+        if (ret == ESP_OK)
+        {
+            httpd_resp_sendstr(req, "Success: Updated WiFi SSID and password successfully.\n");
+        }
+        else
+        {
+            httpd_resp_set_status(req, HTTPD_500);
+            httpd_resp_sendstr(req, "Error: Failed to update WiFi SSID and password.\n");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "WiFi SSID or password missing from post data");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Missing SSID or password");
+        cJSON_Delete(json);
+        free(buf);
+        return ESP_FAIL;
+    }
+
+    cJSON_Delete(json);
+    free(buf);
+
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    esp_restart();
+
+    return ESP_OK;
+}
+
+static esp_err_t post_dev_info_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    int cur_len = 0;
+    char *buf = malloc(512);
+    int received = 0;
+    if (total_len >= 512)
+    {
+        /* Respond with 500 Internal Server Error */
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
+        return ESP_FAIL;
+    }
+    while (cur_len < total_len)
+    {
+        received = httpd_req_recv(req, buf + cur_len, total_len);
+        if (received <= 0)
+        {
+            /* Respond with 500 Internal Server Error */
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post device info");
+            free(buf);
+            return ESP_FAIL;
+        }
+        cur_len += received;
+    }
+    buf[total_len] = '\0';
+    ESP_LOGD(TAG, "Received post_dev_info %s", buf);
+
+    esp_err_t ret_name = ESP_OK, ret_loc = ESP_OK;
+    cJSON *json = cJSON_Parse(buf);
+    bool has_name = cJSON_HasObjectItem(json, "dev_name");
+    bool has_location = cJSON_HasObjectItem(json, "dev_location");
+
+    if (has_name)
+    {
+        if (strlen(cJSON_GetObjectItem(json, "dev_name")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Device name too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Device name too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Updating device name");
+
+        ret_name = nvs_set_device_name(cJSON_GetObjectItem(json, "dev_name")->valuestring);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret_name);
+    }
+
+    if (has_location)
+    {
+        if (strlen(cJSON_GetObjectItem(json, "dev_location")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Error: Device location too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Device location too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Updating device location");
+
+        ret_loc = nvs_set_device_location(cJSON_GetObjectItem(json, "dev_location")->valuestring);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret_loc);
+    }
+
+    if (has_name && (ret_name != ESP_OK))
+        httpd_resp_set_status(req, HTTPD_500);
+    if (has_location && (ret_loc != ESP_OK))
+        httpd_resp_set_status(req, HTTPD_500);
+
+    if (has_name && (ret_name == ESP_OK))
+        httpd_resp_sendstr_chunk(req, "Success: Successfully updated device name\n");
+    else if (has_name)
+    {
+        httpd_resp_sendstr_chunk(req, "Error: Failed to update device name (");
+        httpd_resp_sendstr_chunk(req, esp_err_to_name(ret_name));
+        httpd_resp_sendstr_chunk(req, ")\n");
+    }
+    if (has_location && (ret_loc == ESP_OK))
+        httpd_resp_sendstr_chunk(req, "Success: Successfully updated device location\n");
+    else if (has_location)
+    {
+        httpd_resp_sendstr_chunk(req, "Error: Failed to update device location (");
+        httpd_resp_sendstr_chunk(req, esp_err_to_name(ret_name));
+        httpd_resp_sendstr_chunk(req, ")\n");
+    }
+
+    httpd_resp_sendstr_chunk(req, "\0");
+
+    cJSON_Delete(json);
+    free(buf);
+
+    return ESP_OK;
+}
+
 static esp_err_t get_measurement_handler(httpd_req_t *req)
 {
     web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
 
     httpd_resp_set_type(req, "application/json");
     cJSON *json = cJSON_CreateObject();
-    cJSON_AddNumberToObject(json, "CO2", ctx->scd->co2_ewma);
-    cJSON_AddNumberToObject(json, "I", ctx->veml->als);
-    cJSON_AddNumberToObject(json, "RH", ctx->bme->humidity);
-    cJSON_AddNumberToObject(json, "T", ctx->bme->temperature);
-    cJSON_AddNumberToObject(json, "p", ctx->bme->pressure);
+    cJSON_AddNumberToObject(json, "CO2", round(ctx->scd->co2));
+    cJSON_AddNumberToObject(json, "CO2ewma", round(ctx->scd->co2_ewma));
+    cJSON_AddNumberToObject(json, "T_scd", round(ctx->scd->temperature));
+    cJSON_AddNumberToObject(json, "RH_scd", round(ctx->scd->humidity));
+    cJSON_AddNumberToObject(json, "I", round(ctx->veml->als * 10) / 10.0);
+    cJSON_AddNumberToObject(json, "RH", round(ctx->bme->humidity * 10) / 10.0);
+    cJSON_AddNumberToObject(json, "T", round(ctx->bme->temperature * 10) / 10.0);
+    cJSON_AddNumberToObject(json, "p", round(ctx->bme->pressure));
     const char *measurements = cJSON_Print(json);
     httpd_resp_sendstr(req, measurements);
     free((void *)measurements);
@@ -118,21 +437,26 @@ static esp_err_t get_info_handler(httpd_req_t *req)
     esp_netif_get_ip_info(ctx->netif, &ip_info);
     uint8_t mac[6] = {};
 
+    char dev_name[64];
+    char dev_location[64];
+    nvs_get_device_location(dev_location);
+    nvs_get_device_name(dev_name);
+
     httpd_resp_set_type(req, "application/json");
     cJSON *json = cJSON_CreateObject();
-    cJSON_AddStringToObject(json, "Name", "esp32");
-    cJSON_AddStringToObject(json, "Location", "Mars");
+    cJSON_AddStringToObject(json, "name", dev_name);
+    cJSON_AddStringToObject(json, "location", dev_location);
 
     esp_wifi_get_mode(&wifi_mode);
     if (wifi_mode == WIFI_MODE_STA)
     {
         esp_wifi_sta_get_ap_info(&ap_info);
-        cJSON_AddStringToObject(json, "SSID", (char *)ap_info.ssid);
+        cJSON_AddStringToObject(json, "ssid", (char *)ap_info.ssid);
         esp_wifi_get_mac(WIFI_IF_STA, mac);
     }
     else
     {
-        cJSON_AddStringToObject(json, "SSID", "Not connected to WiFi");
+        cJSON_AddStringToObject(json, "ssid", "Not connected to WiFi");
         esp_wifi_get_mac(WIFI_IF_AP, mac);
     }
 
@@ -141,9 +465,9 @@ static esp_err_t get_info_handler(httpd_req_t *req)
     {
         cJSON_AddItemToArray(mac_arr, cJSON_CreateNumber(mac[i]));
     }
-    cJSON_AddItemToObject(json, "MAC", mac_arr);
-    cJSON_AddNumberToObject(json, "IP", ntohl(ip_info.ip.addr));
-    cJSON_AddBoolToObject(json, "ASC", scd30_get_asc(ctx->scd));
+    cJSON_AddItemToObject(json, "mac", mac_arr);
+    cJSON_AddNumberToObject(json, "ip", ntohl(ip_info.ip.addr));
+    cJSON_AddBoolToObject(json, "asc", scd30_get_asc(ctx->scd));
     const char *info = cJSON_Print(json);
     httpd_resp_sendstr(req, info);
     free((void *)info);
@@ -164,6 +488,10 @@ static esp_err_t get_file_handler(httpd_req_t *req)
         strlcat(filepath, "/index.html", sizeof(filepath));
     else
         strlcat(filepath, req->uri, sizeof(filepath));
+
+    if (!strcmp(req->uri, "/settings") || !strcmp(req->uri, "/index"))
+        strlcat(filepath, ".html", sizeof(filepath));
+
     ESP_LOGD(TAG, "get_file_handler(): filepath=%s", req->uri);
 
     // Open the requested file

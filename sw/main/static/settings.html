@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" content="width=device-width, initial-scale=1" name="viewport" />
+    <title>ESP32 air quality monitor</title>
+    <link href="/bulma.min.css" rel="stylesheet" />
+    <link href="/favicon.ico" rel="icon" type="image/x-icon" />
+</head>
+
+<body>
+    <nav class="navbar" role="navigation" aria-label="main navigation">
+        <div class="navbar-brand">
+            <a class="navbar-item" href="/index">
+                <img src="/logo.png" width="90" height="30">
+            </a>
+
+            <a role="button" class="navbar-burger" id="navbar_burger" aria-label="menu" aria-expanded="false"
+                data-target="navbarBasicExample">
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+                <span aria-hidden="true"></span>
+            </a>
+        </div>
+
+        <div class="navbar-menu" id="navbar_menu">
+            <div class="navbar-start">
+                <a href="/index" class="navbar-item">
+                    <p class="subtitle"> Dashboard</p>
+                </a>
+
+                <a href="/settings" class="navbar-item">
+                    <p class="subtitle"> Settings</p>
+                </a>
+            </div>
+
+            <div class="navbar-end">
+                <p class="navbar-item" id="datetime">
+                    Datetime
+                </p>
+            </div>
+        </div>
+    </nav>
+    <section class="section">
+        <div class="container">
+            <div class="columns">
+                <div class="column is-two-thirds">
+                    <div class="box" style="height: 100%">
+                        <p class="title">
+                            Settings
+                        </p>
+                        <div class="box">
+                            <p class="subtitle">
+                                Device
+                            </p>
+
+                            <div class="field is-horizontal">
+                                <div class="field-label is-normal">
+                                    <label class="label">Name</label>
+                                </div>
+                                <div class="field-body">
+                                    <div class="field">
+                                        <div class="control">
+                                            <input class="input" type="text" id="input_dev_name" maxlength="63"
+                                                placeholder="e.g. Jan's ESP32">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="field is-horizontal">
+                                <div class="field-label is-normal">
+                                    <label class="label">Location</label>
+                                </div>
+                                <div class="field-body">
+                                    <div class="field">
+                                        <div class="control">
+                                            <input class="input" type="text" id="input_dev_location" maxlength="63"
+                                                placeholder="e.g. Planet Earth">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="field is-grouped is-grouped-right">
+                                <p class="control">
+                                    <button class="button is-primary" onclick="postDevInfo()">
+                                        Submit
+                                    </button>
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="box">
+                            <p class="subtitle">
+                                Network
+                            </p>
+                            <form id="form_wifi">
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">SSID</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="text" maxlength="31" id="input_ssid" required
+                                                    placeholder="Your WiFi name">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">Password</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="password" maxlength="63" id="input_pass"
+                                                    required placeholder="Your WiFi password">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field is-grouped is-grouped-right">
+                                    <p class="control">
+                                        <button class="button is-primary" type="submit">
+                                            Submit
+                                        </button>
+                                    </p>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="box">
+                            <p class="subtitle">
+                                CO<sub>2</sub> sensor
+                            </p>
+
+                            <div class="field is-horizontal">
+                                <div class="field-label is-normal">
+                                    <label class="label">ASC</label>
+                                </div>
+                                <div class="field-body">
+                                    <div class="field">
+                                        <div class="control">
+                                            <button class="button" onclick="postScdAsc()" id="button_asc">
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <form id="form_frc">
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">FRC</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="number" max="2000" min="400"
+                                                    id="input_frc" required placeholder="Reference value [ppm]">
+                                            </div>
+                                        </div>
+                                        <div class="field">
+                                            <div class="control">
+                                                <button class="button is-link" type="submit" id="button_asc"
+                                                    id="button_frc">
+                                                    Calibrate
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="column is-one-third">
+                    <div class="box">
+                        <p class="title">
+                            Device info
+                        </p>
+                        <table class="table is-striped is-fullwidth">
+                            <tr>
+                                <th>Name</th>
+                                <td id="device_name"></td>
+                            </tr>
+                            <tr>
+                                <th>Location</th>
+                                <td id="device_location"></td>
+                            </tr>
+                            <tr>
+                                <th>WiFi SSID</th>
+                                <td id="device_ssid"></td>
+                            </tr>
+                            <tr>
+                                <th>IP address</th>
+                                <td id="device_ip"></td>
+                            </tr>
+                            <tr>
+                                <th>MAC address</th>
+                                <td id="device_mac"></td>
+                            </tr>
+                            <tr>
+                                <th>SCD30 ASC</th>
+                                <td id="device_asc"></td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <script src="common.js"></script>
+    <script src="settings.js"></script>
+</body>
+
+</html>
