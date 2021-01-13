@@ -5,9 +5,15 @@ const form_frc = document.getElementById("form_frc");
 form_frc.addEventListener("submit", postScdFrc);
 
 function postDevInfo() {
-    data = {};
-    data["dev_name"] = document.getElementById("input_dev_name").value;
-    data["dev_location"] = document.getElementById("input_dev_location").value;
+    var data = {};
+    var new_name = document.getElementById("input_dev_name").value;
+    if (new_name != "") {
+        data["dev_name"] = new_name;
+    }
+    var new_loc = document.getElementById("input_dev_location").value;
+    if (new_loc != "") {
+        data["dev_location"] = new_loc;
+    }
     console.log(data);
     fetch('/api/dev_info', {
         method: 'POST',

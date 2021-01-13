@@ -16,6 +16,7 @@
     "istream": "c",
     "ostream": "c",
     "system_error": "c",
-    "math.h": "c"
+    "math.h": "c",
+    "sntp.h": "c"
   }
 }

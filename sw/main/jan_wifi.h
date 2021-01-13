@@ -4,8 +4,8 @@
 #include <esp_wifi.h>
 #include <freertos/event_groups.h>
 
-#define WIFI_AP_SSID "esp32wifi"
-#define WIFI_AP_PASS "qwertyuiop"
+#define WIFI_AP_SSID "CO2monitor"
+#define WIFI_AP_PASS "esp32esp"
 #define WIFI_AP_CHANNEL 5
 #define WIFI_AP_MAX_STA_CONN 5
 
