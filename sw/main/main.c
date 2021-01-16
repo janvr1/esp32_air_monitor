@@ -246,8 +246,9 @@ void app_main(void)
     uint32_t count = 0;
     int8_t data_ready = 0;
 
+    float duty = 64; // Starting value for duty cyle IIR filter
+    
     // Variables to display on screen
-    float duty = 10;
     int co2 = 0, t = 0, rh = 0;
     lm_color_t co2_color = LM_COLOR_GREEN;
     lm_color_t t_rh_color = LM_COLOR_BLUE;
@@ -356,7 +357,10 @@ void app_main(void)
                                        bme280.pressure,
                                        scd30.co2,
                                        veml.als);
-
+                float offset = scd30.temperature - bme280.temperature;
+                if (offset > 0)
+                    scd30_set_temp_offset(&scd30, offset);
+                scd30_start_measurement(&scd30, round(bme280.pressure) / 100);
                 zrak_api_sent = true;
             }
             else if (zrak_api && zrak_api_sent && (timeinfo.tm_min == 31 || timeinfo.tm_min == 1))

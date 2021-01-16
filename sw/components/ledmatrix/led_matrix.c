@@ -39,7 +39,9 @@ esp_err_t lm_init(led_matrix_t *lm,
 {
     esp_err_t ret;
 
-    lm->frame = heap_caps_calloc(3 * 32, sizeof(uint64_t), MALLOC_CAP_DMA);
+    // lm->frame = heap_caps_calloc(3 * 32, sizeof(uint64_t), MALLOC_CAP_DMA);
+    lm->frame = malloc(3 * 32 * sizeof(uint64_t));
+    lm_clear_frame(lm);
     lm->line_A = A;
     lm->line_B = B;
     lm->line_C = C;
@@ -100,7 +102,7 @@ esp_err_t lm_init(led_matrix_t *lm,
         .sclk_io_num = LM_PIN_NUM_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 3 * 8};
+        .max_transfer_sz = 48};
 
     spi_device_interface_config_t devcfg = {
         .command_bits = 0,
@@ -108,10 +110,10 @@ esp_err_t lm_init(led_matrix_t *lm,
         .clock_speed_hz = SPI_MASTER_FREQ_40M, //Clock out at 40 MHz
         .mode = 0,                             //SPI mode 0
         .spics_io_num = -1,
-        .queue_size = 32,
+        .queue_size = 16,
     };
     //Initialize the SPI bus
-    ret = spi_bus_initialize(HSPI_HOST, &spicfg, LM_DMA_CHAN);
+    ret = spi_bus_initialize(HSPI_HOST, &spicfg, 0);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     //Attach the LCD to the SPI bus
     ret = spi_bus_add_device(HSPI_HOST, &devcfg, &lm->spidev);
@@ -242,15 +244,14 @@ esp_err_t lm_draw_text_xy(led_matrix_t *lm, char *text, int x, int y, lm_color_t
 
 esp_err_t lm_show_frame(led_matrix_t *lm)
 {
-    // ESP_LOGD(TAG, "lm_show_frame() begin");
     esp_err_t ret;
     while (!lm->ready)
         vTaskDelay(1);
     ret = spi_device_acquire_bus(lm->spidev, portMAX_DELAY);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
 
-    uint8_t t_off = 0.63 * lm->duty;
-    uint8_t t_on = 22 + 160 - t_off;
+    uint8_t t_off = 0.699 * lm->duty;
+    uint8_t t_on = 178 - t_off;
     portENTER_CRITICAL(&my_mutex);
     lm->ready = false;
     lm_output_disable(lm);
@@ -264,12 +265,10 @@ esp_err_t lm_show_frame(led_matrix_t *lm)
         lm_output_enable(lm);
         ets_delay_us(t_on);
     }
-    // ets_delay_us(100);
     lm_output_disable(lm);
     lm->ready = true;
     portEXIT_CRITICAL(&my_mutex);
     spi_device_release_bus(lm->spidev);
-    // ESP_LOGD(TAG, "lm_show_frame() end");
     return ret;
 }
 
