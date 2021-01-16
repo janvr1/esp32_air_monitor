@@ -1,19 +1,17 @@
 // #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include "web_app.h"
-#include <esp_log.h>
 #include <string.h>
-#include <esp_wifi.h>
-#include <esp_spiffs.h>
 #include <fcntl.h>
 #include <cJSON.h>
 #include <math.h>
+#include <esp_log.h>
+#include <esp_wifi.h>
+#include <esp_spiffs.h>
 #include <esp_http_server.h>
-// #include <esp_https_server.h>
 #include <esp_heap_caps.h>
+#include "../utilities/jan_nvs.h"
 
-#include "../sensors/jan_scd30.h"
-#include "../jan_nvs.h"
 
 #define CHECK_FILE_EXTENSION(filename, ext) (strcasecmp(&filename[strlen(filename) - strlen(ext)], ext) == 0)
 

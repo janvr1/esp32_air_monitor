@@ -2,26 +2,25 @@
 
 // System libraries
 #include <stdio.h>
-#include <driver/i2c.h>
-#include <esp_log.h>
-#include <esp_wifi.h>
+#include <math.h>
 #include <mdns.h>
 #include <lwip/apps/netbiosns.h>
-#include <esp_http_server.h>
+#include <esp_log.h>
 #include <esp_task.h>
-#include <math.h>
-#include <freertos/queue.h>
 #include <esp_sntp.h>
+#include <esp_wifi.h>
+#include <driver/i2c.h>
 
 // Own libraries
-#include "sensors/jan_bme280.h"
-#include "sensors/jan_scd30.h"
-#include "sensors/jan_veml7700.h"
-#include "ledmatrix/led_matrix.h"
+#include <jan_bme280.h>
+#include <jan_scd30.h>
+#include <jan_veml7700.h>
+#include <led_matrix.h>
+#include <zrak_api.h>
+
 #include "web_app/web_app.h"
 #include "jan_nvs.h"
 #include "jan_wifi.h"
-#include "zrak_api/zrak_api.h"
 
 // Logging tag
 static const char *TAG = "MAIN";
@@ -34,7 +33,7 @@ static const char *TAG = "MAIN";
 #define I2C_GPIO_SCL 4
 #define I2C_FREQUENCY 50000
 
-// IIR filter parameters
+// IIR filter parameters (SCD30)
 #define CO2_INTERVAL 3.0
 #define T_CUTOFF 30.0
 
@@ -55,11 +54,14 @@ static const char *TAG = "MAIN";
 // Led matrix handle
 led_matrix_t lm;
 
+// Function declarations
 static void initialize_mdns(char *hostname);
 static void initialize_sntp(void);
+float calculate_duty(float lux);
+
+// Task functions
 static void display(void *pvParameters);
 static void startup_animation(void *pvParameters);
-float calculate_duty(float lux);
 
 void app_main(void)
 {

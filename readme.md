@@ -2,7 +2,6 @@
 * (HW) Dodaj tipko za FRC
 * (HW) Dodaj jumper za FRC enable/disable
 * (SW) Ubidots
-* (SW) Zrak API
 
 ### Notes:
 * GPIO 6-11: SPI flash

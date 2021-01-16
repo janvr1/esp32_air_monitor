@@ -2,9 +2,9 @@
 #include <esp_vfs.h>
 #include <esp_netif.h>
 #include <esp_http_server.h>
-#include "../sensors/jan_bme280.h"
-#include "../sensors/jan_scd30.h"
-#include "../sensors/jan_veml7700.h"
+#include <jan_bme280.h>
+#include <jan_scd30.h>
+#include <jan_veml7700.h>
 
 #define WEB_APP_BASE_PATH "/spiffs"
 #define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128)
