@@ -11,6 +11,7 @@
 
 ### Display timings:
 * F_pwm = 312,5 kHz (T=3,2 us)
+* PWM: T_low@100%duty=~20 ns
 * T_transfer = ~22 us (2 rows of 64 pixels * 3 colors)
 * T_row = 200 us (T_transfer + 178 delay)
 * Minimum brightness: T_on = 22 us (transfer time), T_off = 178 us (178 us delay)
