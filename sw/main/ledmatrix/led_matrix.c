@@ -18,6 +18,8 @@ static const char *TAG = "JAN_LM";
 #define LM_PIN_NUM_SCLK 14
 #define LM_OE_PWM_CHAN LEDC_CHANNEL_0
 
+static portMUX_TYPE my_mutex = portMUX_INITIALIZER_UNLOCKED;
+
 esp_err_t lm_output_disable(led_matrix_t *lm);
 esp_err_t lm_output_enable(led_matrix_t *lm);
 esp_err_t lm_output_disable_fixed(led_matrix_t *lm);
@@ -25,6 +27,7 @@ esp_err_t lm_output_enable_fixed(led_matrix_t *lm);
 esp_err_t lm_latch_output(led_matrix_t *lm);
 esp_err_t lm_select_line(led_matrix_t *lm, uint8_t line);
 esp_err_t lm_transfer_line(led_matrix_t *lm, uint16_t line);
+uint16_t lm_get_row_offset(int row, lm_color_t color);
 
 esp_err_t lm_init(led_matrix_t *lm,
                   gpio_num_t A,
@@ -44,7 +47,7 @@ esp_err_t lm_init(led_matrix_t *lm,
     lm->output_enable = output_enable;
     lm->latch = latch;
     lm->ready = true;
-    lm->duty = 512;
+    lm->duty = 64;
 
     // Configure GPIO outputs
     gpio_config_t io_conf;
@@ -70,9 +73,9 @@ esp_err_t lm_init(led_matrix_t *lm,
     // Output enable PWM configuration
     ledc_timer_config_t timercfg = {
         .speed_mode = LEDC_HIGH_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_10_BIT,
+        .duty_resolution = LEDC_TIMER_8_BIT,
         .timer_num = LEDC_TIMER_0,
-        .freq_hz = 78125,
+        .freq_hz = 312500,
         .clk_cfg = LEDC_AUTO_CLK,
     };
     ret = ledc_timer_config(&timercfg);
@@ -84,7 +87,7 @@ esp_err_t lm_init(led_matrix_t *lm,
         .channel = LM_OE_PWM_CHAN,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LEDC_TIMER_0,
-        .duty = 127,
+        .duty = 64,
         .hpoint = 0,
     };
     ret = ledc_channel_config(&chancfg);
@@ -102,7 +105,7 @@ esp_err_t lm_init(led_matrix_t *lm,
     spi_device_interface_config_t devcfg = {
         .command_bits = 0,
         .address_bits = 0,
-        .clock_speed_hz = SPI_MASTER_FREQ_40M, //Clock out at 20 MHz
+        .clock_speed_hz = SPI_MASTER_FREQ_40M, //Clock out at 40 MHz
         .mode = 0,                             //SPI mode 0
         .spics_io_num = -1,
         .queue_size = 32,
@@ -114,6 +117,8 @@ esp_err_t lm_init(led_matrix_t *lm,
     ret = spi_bus_add_device(HSPI_HOST, &devcfg, &lm->spidev);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
 
+    // spi_get_actual_clock()
+
     lm_output_disable(lm);
 
     return ret;
@@ -122,44 +127,48 @@ esp_err_t lm_init(led_matrix_t *lm,
 void lm_set_pixel(led_matrix_t *lm, int val, int x, int y, lm_color_t c)
 {
     lm->ready = false;
-    int idx = 3 * 8 * y + x / 8; // Index of byte the pixel belongs to;
-    idx += 8 * c;                // Add the color
-    uint8_t *ptr = lm->frame + idx;
-    uint8_t shift = 7 - x % 8; // Bit shift needed to put 1 in correct position
+    uint16_t offset = 1 + 6 * (y % 16) - y / 16 + c;
+    uint64_t *row = lm->frame + offset;     // Address of the line (uint64_t) this pixel belongs to
+    uint8_t *byte = (uint8_t *)row + x / 8; // Address of the byte this pixel belongs to
+    uint8_t shift = 7 - x % 8;              // Bit shift needed to put the pixel in proper positon inside the byte
     if (val)
-        *ptr |= 1 << shift; // Set the bit
+        *byte |= 1 << shift; // Set the bit
     else
-        *ptr &= ~(1 << shift); // Clear the bit
+        *byte &= ~(1 << shift); // Clear the bit
     lm->ready = true;
 }
 
-void lm_draw_char(led_matrix_t *lm, unsigned char chr, int row, int pos, lm_color_t c)
+uint16_t lm_get_row_offset(int r, lm_color_t color)
 {
-    lm->ready = false;
-    int idx = pos + 8 * c + 24 * 8 * row;
-    uint8_t *ptr = lm->frame + idx;
+    return 1 + 6 * (r % 16) - r / 16 + color;
+}
+
+void lm_draw_char(led_matrix_t *lm, unsigned char chr, int pos, int row, lm_color_t c)
+{
+    uint64_t *row_ptr = lm->frame + lm_get_row_offset(row * 8, c);
+    uint8_t *byte = (uint8_t *)row_ptr + pos;
     for (int i = 0; i < 8; i++)
     {
-        *ptr = LM_FONT[chr][i];
-        ptr += 8 * 3;
+        *byte = LM_FONT[chr][i];
+        byte += 48;
     }
-    lm->ready = true;
 }
 
-esp_err_t lm_draw_text(led_matrix_t *lm, char *text, int row, int pos, lm_color_t c)
+esp_err_t lm_draw_text(led_matrix_t *lm, char *text, int pos, int row, lm_color_t c)
 {
-    if (row > 3 || pos > 7)
+    if (pos > 7 || row > 3)
     {
         ESP_LOGE(TAG, "Text placement out of range: row=%d, pos=%d", row, pos);
         return ESP_FAIL;
     }
-    while (lm->tx_in_progress)
+    while (!lm->ready)
         vTaskDelay(1);
     size_t len = strlen(text);
+    // portENTER_CRITICAL(&my_mutex);
     lm->ready = false;
     for (int i = 0; i < len; i++)
     {
-        if (pos % 8 == 0 && pos > 0)
+        if (pos > 7)
         {
             pos = 0;
             row++;
@@ -167,12 +176,67 @@ esp_err_t lm_draw_text(led_matrix_t *lm, char *text, int row, int pos, lm_color_
         if (row > 3)
         {
             ESP_LOGE(TAG, "Ran out of space on screen");
+            // portEXIT_CRITICAL(&my_mutex);
+            lm->ready = true;
             return ESP_FAIL;
         }
-        lm_draw_char(lm, text[i], row, pos, c);
+        lm_draw_char(lm, text[i], pos, row, c);
         pos++;
     }
     lm->ready = true;
+    // portEXIT_CRITICAL(&my_mutex);
+    return ESP_OK;
+}
+
+void lm_draw_char_xy(led_matrix_t *lm, unsigned char chr, int x, int y, lm_color_t c)
+{
+    lm->ready = false;
+    uint16_t offset;
+    uint64_t *row;
+    uint64_t val;
+
+    for (int i = 0; i < 8; i++)
+    {
+        val = (uint64_t)LM_FONT[chr][i];
+        offset = lm_get_row_offset(y, c);
+        row = lm->frame + offset;
+        *row |= val << x;
+        *row &= ~(val << x);
+        y++;
+    }
+    lm->ready = true;
+}
+
+esp_err_t lm_draw_text_xy(led_matrix_t *lm, char *text, int x, int y, lm_color_t c)
+{
+    if (y > 24 || x > 56)
+    {
+        ESP_LOGE(TAG, "Text placement out of range: x=%d, y=%d", x, y);
+        return ESP_FAIL;
+    }
+    while (!lm->ready)
+        vTaskDelay(1);
+    size_t len = strlen(text);
+    // portENTER_CRITICAL(&my_mutex);
+    lm->ready = false;
+    for (int i = 0; i < len; i++)
+    {
+        lm_draw_char(lm, text[i], x, y, c);
+        x += 8;
+        if (x > 56)
+        {
+            x = 0;
+            y += 8;
+        }
+        if (y > 24)
+        {
+            ESP_LOGE(TAG, "Ran out of space on screen");
+            // portEXIT_CRITICAL(&my_mutex);
+            return ESP_FAIL;
+        }
+    }
+    lm->ready = true;
+    // portEXIT_CRITICAL(&my_mutex);
     return ESP_OK;
 }
 
@@ -182,100 +246,44 @@ esp_err_t lm_show_frame(led_matrix_t *lm)
     esp_err_t ret;
     while (!lm->ready)
         vTaskDelay(1);
-    lm->tx_in_progress = true;
     ret = spi_device_acquire_bus(lm->spidev, portMAX_DELAY);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+
+    uint8_t t_off = 0.63 * lm->duty;
+    uint8_t t_on = 22 + 160 - t_off;
+    portENTER_CRITICAL(&my_mutex);
+    lm->ready = false;
     lm_output_disable(lm);
     for (uint8_t i = 0; i < 16; i++)
     {
         lm_transfer_line(lm, i);
-
         lm_output_disable(lm);
-        ets_delay_us(lm->duty / 2);
+        ets_delay_us(t_off);
         lm_latch_output(lm);
         lm_select_line(lm, i);
         lm_output_enable(lm);
-        ets_delay_us(320);
+        ets_delay_us(t_on);
     }
-    ets_delay_us(100);
+    // ets_delay_us(100);
     lm_output_disable(lm);
+    lm->ready = true;
+    portEXIT_CRITICAL(&my_mutex);
     spi_device_release_bus(lm->spidev);
-    lm->tx_in_progress = false;
     // ESP_LOGD(TAG, "lm_show_frame() end");
     return ret;
 }
 
 esp_err_t lm_transfer_line(led_matrix_t *lm, uint16_t line)
 {
-    // ESP_LOGD(TAG, "lm_transfer_line(%d) begin", line);
     esp_err_t ret;
-    uint64_t *tx_0 = (uint64_t *)lm->frame + 3 * line;
-    uint64_t *tx_1 = (uint64_t *)lm->frame + 3 * (line + 16);
-
-    spi_transaction_t b1 = {
-        .length = 64,
+    uint64_t *tx_buffer = lm->frame + line * 6;
+    spi_transaction_t tx = {
+        .length = 384,
         .rxlength = 0,
         .rx_buffer = NULL,
-        .tx_buffer = tx_1 + 2,
-    };
-    ret = spi_device_polling_start(lm->spidev, &b1, portMAX_DELAY);
+        .tx_buffer = (void *)tx_buffer};
+    ret = spi_device_polling_transmit(lm->spidev, &tx);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    spi_transaction_t b0 = {
-        .length = 64,
-        .rxlength = 0,
-        .rx_buffer = NULL,
-        .tx_buffer = tx_0 + 2,
-    };
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_start(lm->spidev, &b0, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-
-    spi_transaction_t g1 = {
-        .length = 64,
-        .rxlength = 0,
-        .rx_buffer = NULL,
-        .tx_buffer = tx_1 + 1,
-    };
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_start(lm->spidev, &g1, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    spi_transaction_t g0 = {
-        .length = 64,
-        .rxlength = 0,
-        .rx_buffer = NULL,
-        .tx_buffer = tx_0 + 1,
-    };
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_start(lm->spidev, &g0, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    spi_transaction_t r1 = {
-        .length = 64,
-        .rxlength = 0,
-        .rx_buffer = NULL,
-        .tx_buffer = tx_1,
-    };
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_start(lm->spidev, &r1, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    spi_transaction_t r0 = {
-        .length = 64,
-        .rxlength = 0,
-        .rx_buffer = NULL,
-        .tx_buffer = tx_0,
-    };
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_start(lm->spidev, &r0, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-    ret = spi_device_polling_end(lm->spidev, portMAX_DELAY);
-    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
-
-    // ESP_LOGD(TAG, "lm_transfer_line(%d) end", line);
-
     return ret;
 }
 
@@ -287,9 +295,9 @@ esp_err_t lm_deinit(led_matrix_t *lm)
 
 void lm_set_duty(led_matrix_t *lm, uint16_t duty)
 {
-    if (duty > 1023)
-        duty = 1023;
-    lm->duty = (1023 - duty);
+    if (duty > 255)
+        duty = 255;
+    lm->duty = (255 - duty);
 }
 
 esp_err_t lm_output_disable(led_matrix_t *lm)

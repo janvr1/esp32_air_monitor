@@ -18,6 +18,87 @@ esp_err_t nvs_init(void)
     return ret;
 }
 
+esp_err_t nvs_get_zrak_api_credentials(char *user, char *pass, uint32_t *dev_id)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t ret;
+    size_t max_len_user = 64;
+    size_t max_len_pass = 64;
+
+    ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error opening NVS");
+        return ret;
+    }
+
+    ret = nvs_get_str(nvs_handle, "zrak_user", user, &max_len_user);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading zrak api user from NVS");
+        return ret;
+    }
+
+    ret = nvs_get_str(nvs_handle, "zrak_pass", pass, &max_len_pass);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading zrak api pass from NVS");
+        return ret;
+    }
+
+    ret = nvs_get_u32(nvs_handle, "zrak_dev_id", dev_id);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error reading zrak api dev_id from NVS");
+        return ret;
+    }
+
+    return ret;
+}
+esp_err_t nvs_set_zrak_api_credentials(char *user, char *pass, uint32_t dev_id)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t ret;
+
+    ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error opening NVS");
+        return ret;
+    }
+
+    ret = nvs_set_str(nvs_handle, "zrak_user", user);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error writing zrak api user to NVS");
+        return ret;
+    }
+
+    ret = nvs_set_str(nvs_handle, "zrak_pass", pass);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error writing zrak api pass to NVS");
+        return ret;
+    }
+
+    ret = nvs_set_u32(nvs_handle, "zrak_dev_id", dev_id);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error writing zrak api dev_id to NVS");
+        return ret;
+    }
+
+    return ret;
+}
+
 esp_err_t nvs_get_device_name(char *name)
 {
     nvs_handle_t nvs_handle;

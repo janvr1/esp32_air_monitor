@@ -12,7 +12,7 @@
     <nav class="navbar" role="navigation" aria-label="main navigation">
         <div class="navbar-brand">
             <a class="navbar-item" href="/index">
-                <img src="/logo.png" width="90" height="30">
+                <img src="/logo.jpg" width="90" height="30">
             </a>
 
             <a role="button" class="navbar-burger" id="navbar_burger" aria-label="menu" aria-expanded="false"
@@ -84,7 +84,7 @@
 
                             <div class="field is-grouped is-grouped-right">
                                 <p class="control">
-                                    <button class="button is-primary" onclick="postDevInfo()">
+                                    <button class="button is-link" onclick="postDevInfo()">
                                         Submit
                                     </button>
                                 </p>
@@ -109,7 +109,6 @@
                                         </div>
                                     </div>
                                 </div>
-
                                 <div class="field is-horizontal">
                                     <div class="field-label is-normal">
                                         <label class="label">Password</label>
@@ -126,7 +125,62 @@
 
                                 <div class="field is-grouped is-grouped-right">
                                     <p class="control">
-                                        <button class="button is-primary" type="submit">
+                                        <button class="button is-link" type="submit">
+                                            Submit
+                                        </button>
+                                    </p>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="box">
+                            <p class="subtitle">
+                                API integration
+                            </p>
+                            <form id="form_zrak">
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">Username</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="text" maxlength="63" id="input_zrak_user"
+                                                    required placeholder="Your username">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">Password</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="password" maxlength="63" id="input_zrak_pass"
+                                                    required placeholder="Your password">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="field is-horizontal">
+                                    <div class="field-label is-normal">
+                                        <label class="label">Device ID</label>
+                                    </div>
+                                    <div class="field-body">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input class="input" type="number" min="1" id="input_zrak_dev_id"
+                                                    required placeholder="Device ID">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field is-grouped is-grouped-right">
+                                    <p class="control">
+                                        <button class="button is-link" type="submit">
                                             Submit
                                         </button>
                                     </p>
@@ -159,8 +213,8 @@
                                     <div class="field-body">
                                         <div class="field">
                                             <div class="control">
-                                                <input class="input" type="number" max="2000" min="400"
-                                                    id="input_frc" required placeholder="Reference value [ppm]">
+                                                <input class="input" type="number" max="2000" min="400" id="input_frc"
+                                                    required placeholder="Reference value [ppm]">
                                             </div>
                                         </div>
                                         <div class="field">
@@ -203,6 +257,10 @@
                             <tr>
                                 <th>MAC address</th>
                                 <td id="device_mac"></td>
+                            </tr>
+                            <tr>
+                                <th>Memory</th>
+                                <td id="device_memory"></td>
                             </tr>
                             <tr>
                                 <th>SCD30 ASC</th>

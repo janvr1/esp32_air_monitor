@@ -14,7 +14,7 @@ function get_measurements() {
             hum.innerText = Math.round(data.RH);
             hum.innerText += " %RH";
             co2 = document.getElementById("co2");
-            co2.innerText = data.CO2ewma;
+            co2.innerText = data.CO2;
             co2.innerText += " ppm";
             pres = document.getElementById("pressure");
             pres.innerText = Math.round(data.p / 100);
@@ -22,6 +22,8 @@ function get_measurements() {
             illu = document.getElementById("illuminance");
             illu.innerText = data.I;
             illu.innerText += " lux";
+        }).catch((error) => {
+            console.error('Error:', error);
         });
 }
 

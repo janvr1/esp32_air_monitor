@@ -34,6 +34,8 @@ esp_err_t veml7700_begin(veml7700_dev_t *veml, i2c_port_t i2c_port, bool auto_pa
     esp_err_t ret;
     veml->i2c_port = i2c_port;
     veml->auto_parameters = auto_parameters;
+    veml->als = 0;
+    veml->white = 0;
 
     // Power off the sensor
     ret = veml7700_enable(veml, false);

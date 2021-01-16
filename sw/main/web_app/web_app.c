@@ -1,4 +1,4 @@
-#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+// #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 
 #include "web_app.h"
 #include <esp_log.h>
@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <cJSON.h>
 #include <math.h>
+#include <esp_http_server.h>
+// #include <esp_https_server.h>
+#include <esp_heap_caps.h>
 
 #include "../sensors/jan_scd30.h"
 #include "../jan_nvs.h"
@@ -26,6 +29,8 @@ static esp_err_t post_dev_info_handler(httpd_req_t *req);
 static esp_err_t post_wifi_handler(httpd_req_t *req);
 static esp_err_t post_scd_asc_handler(httpd_req_t *req);
 static esp_err_t post_scd_frc_handler(httpd_req_t *req);
+static esp_err_t post_zrak_handler(httpd_req_t *req);
+static esp_err_t read_req_data(httpd_req_t *req, char *buf, size_t maxlen);
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath);
 
 esp_err_t web_app_init(esp_netif_t *netif,
@@ -41,16 +46,19 @@ esp_err_t web_app_init(esp_netif_t *netif,
     if (ret != ESP_OK)
         return ret;
 
-    // Intialize HTTP server
     httpd_handle_t server = NULL;
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.uri_match_fn = httpd_uri_match_wildcard;
+
+    // Intialize HTTP server
+    httpd_config_t conf_httpd = HTTPD_DEFAULT_CONFIG();
+    conf_httpd.uri_match_fn = httpd_uri_match_wildcard;
+    conf_httpd.core_id = 0;
+    conf_httpd.task_priority = 5;
 
     ESP_LOGI(TAG, "Starting HTTP Server");
-    ret = httpd_start(&server, &config);
+    ret = httpd_start(&server, &conf_httpd);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Error starting HTTP server: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -61,10 +69,12 @@ esp_err_t web_app_init(esp_netif_t *netif,
         ESP_LOGE(TAG, "Failed to allocate memory for web_app_context");
         return ESP_FAIL;
     }
+
     web_ctx->scd = scd;
     web_ctx->bme = bme;
     web_ctx->veml = veml;
     web_ctx->netif = netif;
+    web_ctx->buffer = malloc(CHUNK_BUFSIZE);
 
     httpd_uri_t get_measurements_uri = {
         .uri = "/api/measurements",
@@ -108,7 +118,14 @@ esp_err_t web_app_init(esp_netif_t *netif,
         .user_ctx = web_ctx};
     httpd_register_uri_handler(server, &post_scd_frc_uri);
 
-    httpd_uri_t get_file_uri = {.uri = "/*", .method = HTTP_GET, .handler = get_file_handler, .user_ctx = NULL};
+    httpd_uri_t post_zrak_uri = {
+        .uri = "/api/zrak",
+        .method = HTTP_POST,
+        .handler = post_zrak_handler,
+        .user_ctx = NULL};
+    httpd_register_uri_handler(server, &post_zrak_uri);
+
+    httpd_uri_t get_file_uri = {.uri = "/*", .method = HTTP_GET, .handler = get_file_handler, .user_ctx = web_ctx};
     httpd_register_uri_handler(server, &get_file_uri);
 
     return ESP_OK;
@@ -121,37 +138,121 @@ void web_app_stop(httpd_handle_t *server)
     httpd_stop(server);
 }
 
+static esp_err_t post_zrak_handler(httpd_req_t *req)
+{
+    esp_err_t ret;
+
+    size_t maxlen = 256;
+    char *buf = malloc(maxlen);
+    ret = read_req_data(req, buf, maxlen);
+
+    if (ret == ESP_ERR_INVALID_SIZE)
+    {
+        ESP_LOGE(TAG, "Received request data is larger than provided buffer");
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
+        return ESP_FAIL;
+    }
+    if (ret == ESP_FAIL)
+    {
+        ESP_LOGE(TAG, "Failed to read the request data");
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request data");
+        return ESP_FAIL;
+    }
+
+    cJSON *json = cJSON_Parse(buf);
+
+    if (cJSON_HasObjectItem(json, "user") && cJSON_HasObjectItem(json, "pass") && cJSON_HasObjectItem(json, "dev_id"))
+    {
+        if (strlen(cJSON_GetObjectItem(json, "user")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Error: Zrak API username too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Username too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+
+        if (strlen(cJSON_GetObjectItem(json, "pass")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Error: Zrak API password too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Password too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+
+        ESP_LOGI(TAG, "Updating zrak API user & pass");
+
+        ret = nvs_set_zrak_api_credentials(cJSON_GetObjectItem(json, "user")->valuestring,
+                                           cJSON_GetObjectItem(json, "pass")->valuestring,
+                                           cJSON_GetObjectItem(json, "dev_id")->valueint);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+        ESP_LOGD(TAG, "Zrak API user: %s", cJSON_GetObjectItem(json, "user")->valuestring);
+        ESP_LOGD(TAG, "Zrak API pass: %s", cJSON_GetObjectItem(json, "pass")->valuestring);
+        ESP_LOGD(TAG, "Zrak API dev_id: %d", cJSON_GetObjectItem(json, "dev_id")->valueint);
+
+        if (ret == ESP_OK)
+        {
+            httpd_resp_sendstr(req, "Success: Updated Zrak API credentials successfully.\n");
+        }
+        else
+        {
+            httpd_resp_set_status(req, HTTPD_500);
+            httpd_resp_sendstr(req, "Error: Failed to update Zrak API credentials.\n");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Zrak API json missing fields");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Missing one of the required fields");
+        cJSON_Delete(json);
+        free(buf);
+        return ESP_FAIL;
+    }
+
+    cJSON_Delete(json);
+    free(buf);
+
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    esp_restart();
+}
+
 static esp_err_t post_scd_frc_handler(httpd_req_t *req)
 {
-    char *buf = malloc(32);
+    char buf[32] = {};
     esp_err_t ret = httpd_req_get_url_query_str(req, buf, 32);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Error getting the query string");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to parse query string");
-        free(buf);
+        // free(buf);
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, "Parsed URL query: %s", buf);
-    char *val = malloc(6);
+    char val[10] = {};
     ret = httpd_query_key_value(buf, "ref", val, 6);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Error getting the query string");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to get query value");
-        free(buf);
-        free(val);
+        // free(buf);
+        // free(val);
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, "Parsed query value: %s", val);
-    free(buf);
+    // free(buf);
 
     int ref_val = strtol(val, NULL, 10);
     ESP_LOGD(TAG, "Parsed FRC value: %d", ref_val);
 
-    free(val);
+    // free(val);
     web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
     ret = scd30_set_frc(ctx->scd, ref_val);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
@@ -169,31 +270,31 @@ static esp_err_t post_scd_frc_handler(httpd_req_t *req)
 
 static esp_err_t post_scd_asc_handler(httpd_req_t *req)
 {
-    char *buf = malloc(32);
+    char buf[32] = {};
     esp_err_t ret = httpd_req_get_url_query_str(req, buf, 32);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Error getting the query string");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to parse query string");
-        free(buf);
+        // free(buf);
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, "Parsed URL query: %s", buf);
-    char *val = malloc(2);
+    char val[2] = {};
     ret = httpd_query_key_value(buf, "enable", val, 2);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Error getting the query string");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Failed to get query value");
-        free(buf);
-        free(val);
+        // free(buf);
+        // free(val);
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, "Parsed query value: %s", val);
 
-    free(buf);
+    // free(buf);
     bool asc = false;
     if (val[0] == '1')
         asc = true;
@@ -205,7 +306,7 @@ static esp_err_t post_scd_asc_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: Invalid query string");
         return ESP_FAIL;
     }
-    free(val);
+    // free(val);
     web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
     ret = scd30_set_asc(ctx->scd, asc);
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
@@ -229,55 +330,48 @@ static esp_err_t post_scd_asc_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_handler(httpd_req_t *req)
 {
-    int total_len = req->content_len;
-    int cur_len = 0;
-    char *buf = malloc(512);
-    int received = 0;
-    if (total_len >= 512)
-    {
-        /* Respond with 500 Internal Server Error */
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
-        free(buf);
-        return ESP_FAIL;
-    }
-    while (cur_len < total_len)
-    {
-        received = httpd_req_recv(req, buf + cur_len, total_len);
-        if (received <= 0)
-        {
-            /* Respond with 500 Internal Server Error */
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post device info");
-            free(buf);
-            return ESP_FAIL;
-        }
-        cur_len += received;
-    }
-    buf[total_len] = '\0';
-    ESP_LOGD(TAG, "Received post_wifi: %s", buf);
-
     esp_err_t ret;
+
+    size_t maxlen = 256;
+    char *buf = malloc(maxlen);
+    ret = read_req_data(req, buf, maxlen);
+
+    if (ret == ESP_ERR_INVALID_SIZE)
+    {
+        ESP_LOGE(TAG, "Received request data is larger than provided buffer");
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
+        return ESP_FAIL;
+    }
+    if (ret == ESP_FAIL)
+    {
+        ESP_LOGE(TAG, "Failed to read the request data");
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request data");
+        return ESP_FAIL;
+    }
+
     cJSON *json = cJSON_Parse(buf);
-
-    if (strlen(cJSON_GetObjectItem(json, "ssid")->valuestring) > 63)
-    {
-        ESP_LOGE(TAG, "Error: WiFi SSID too long");
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi SSID too long");
-        cJSON_Delete(json);
-        free(buf);
-        return ESP_FAIL;
-    }
-
-    if (strlen(cJSON_GetObjectItem(json, "pass")->valuestring) > 63)
-    {
-        ESP_LOGE(TAG, "Error: WiFi password too long");
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi password too long");
-        cJSON_Delete(json);
-        free(buf);
-        return ESP_FAIL;
-    }
 
     if (cJSON_HasObjectItem(json, "ssid") && cJSON_HasObjectItem(json, "pass"))
     {
+        if (strlen(cJSON_GetObjectItem(json, "ssid")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Error: WiFi SSID too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi SSID too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
+
+        if (strlen(cJSON_GetObjectItem(json, "pass")->valuestring) > 63)
+        {
+            ESP_LOGE(TAG, "Error: WiFi password too long");
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Error: WiFi password too long");
+            cJSON_Delete(json);
+            free(buf);
+            return ESP_FAIL;
+        }
         ESP_LOGI(TAG, "Updating wifi ssid and password");
 
         ret = nvs_set_wifi_ssid_pass(cJSON_GetObjectItem(json, "ssid")->valuestring, cJSON_GetObjectItem(json, "pass")->valuestring);
@@ -307,7 +401,7 @@ static esp_err_t post_wifi_handler(httpd_req_t *req)
     cJSON_Delete(json);
     free(buf);
 
-    vTaskDelay(500 / portTICK_PERIOD_MS);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
     esp_restart();
 
     return ESP_OK;
@@ -315,33 +409,31 @@ static esp_err_t post_wifi_handler(httpd_req_t *req)
 
 static esp_err_t post_dev_info_handler(httpd_req_t *req)
 {
-    int total_len = req->content_len;
-    int cur_len = 0;
-    char *buf = malloc(512);
-    int received = 0;
-    if (total_len >= 512)
+    esp_err_t ret;
+
+    size_t maxlen = 256;
+    char *buf = malloc(maxlen);
+    ret = read_req_data(req, buf, maxlen);
+
+    if (ret == ESP_ERR_INVALID_SIZE)
     {
-        /* Respond with 500 Internal Server Error */
+        ESP_LOGE(TAG, "Received request data is larger than provided buffer");
+        free(buf);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Content too long");
         return ESP_FAIL;
     }
-    while (cur_len < total_len)
+    if (ret == ESP_FAIL)
     {
-        received = httpd_req_recv(req, buf + cur_len, total_len);
-        if (received <= 0)
-        {
-            /* Respond with 500 Internal Server Error */
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post device info");
-            free(buf);
-            return ESP_FAIL;
-        }
-        cur_len += received;
+        ESP_LOGE(TAG, "Failed to read the request data");
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request data");
+        return ESP_FAIL;
     }
-    buf[total_len] = '\0';
-    ESP_LOGD(TAG, "Received post_dev_info %s", buf);
 
     esp_err_t ret_name = ESP_OK, ret_loc = ESP_OK;
+
     cJSON *json = cJSON_Parse(buf);
+
     bool has_name = cJSON_HasObjectItem(json, "dev_name");
     bool has_location = cJSON_HasObjectItem(json, "dev_location");
 
@@ -415,8 +507,8 @@ static esp_err_t get_measurement_handler(httpd_req_t *req)
     cJSON *json = cJSON_CreateObject();
     cJSON_AddNumberToObject(json, "CO2", round(ctx->scd->co2));
     cJSON_AddNumberToObject(json, "CO2ewma", round(ctx->scd->co2_ewma));
-    cJSON_AddNumberToObject(json, "T_scd", round(ctx->scd->temperature));
-    cJSON_AddNumberToObject(json, "RH_scd", round(ctx->scd->humidity));
+    cJSON_AddNumberToObject(json, "T_scd", round(ctx->scd->temperature * 10) / 10.0);
+    cJSON_AddNumberToObject(json, "RH_scd", round(ctx->scd->humidity * 10) / 10.0);
     cJSON_AddNumberToObject(json, "I", round(ctx->veml->als * 10) / 10.0);
     cJSON_AddNumberToObject(json, "RH", round(ctx->bme->humidity * 10) / 10.0);
     cJSON_AddNumberToObject(json, "T", round(ctx->bme->temperature * 10) / 10.0);
@@ -446,7 +538,7 @@ static esp_err_t get_info_handler(httpd_req_t *req)
     cJSON *json = cJSON_CreateObject();
     cJSON_AddStringToObject(json, "name", dev_name);
     cJSON_AddStringToObject(json, "location", dev_location);
-
+    cJSON_AddNumberToObject(json, "free_heap", esp_get_free_heap_size());
     esp_wifi_get_mode(&wifi_mode);
     if (wifi_mode == WIFI_MODE_STA)
     {
@@ -508,7 +600,8 @@ static esp_err_t get_file_handler(httpd_req_t *req)
     set_content_type_from_file(req, filepath);
 
     // Allocated buffer for reading chunks of file
-    char *chunk = malloc(CHUNK_BUFSIZE);
+    web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
+    char *chunk = ctx->buffer;
     ssize_t read_bytes;
     do
     {
@@ -535,10 +628,29 @@ static esp_err_t get_file_handler(httpd_req_t *req)
     } while (read_bytes > 0);
     /* Close file after sending complete */
     close(fd);
-    free(chunk);
+    // free(chunk);
     ESP_LOGI(TAG, "File sending complete");
     /* Respond with an empty chunk to signal HTTP response completion */
     httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t read_req_data(httpd_req_t *req, char *buf, size_t maxlen)
+{
+    int total_len = req->content_len;
+    if (total_len >= maxlen)
+        return ESP_ERR_INVALID_SIZE;
+    int cur_len = 0;
+    int received = 0;
+    while (cur_len < total_len)
+    {
+        received = httpd_req_recv(req, buf + cur_len, total_len);
+        if (received <= 0)
+            return ESP_FAIL;
+        cur_len += received;
+    }
+    buf[total_len] = '\0';
+    ESP_LOGD(TAG, "Received request data: %s", buf);
     return ESP_OK;
 }
 

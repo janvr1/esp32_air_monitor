@@ -29,6 +29,11 @@ esp_err_t scd30_begin(scd30_dev_t *scd, i2c_port_t i2c_port, uint16_t interval, 
 {
     scd->i2c_port = i2c_port;
     scd->t_cutoff = t_cutoff;
+    scd->alpha = 1;
+    scd->co2 = 400;
+    scd->co2_ewma = 400;
+    scd->temperature = 0;
+    scd->humidity = 0;
 
     scd30_fw_ver_t scd_fw;
     esp_err_t ret = scd30_get_fw_version(scd, &scd_fw);

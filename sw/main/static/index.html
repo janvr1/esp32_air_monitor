@@ -5,14 +5,13 @@
     <meta charset="utf-8" content="width=device-width, initial-scale=1" name="viewport" />
     <title>ESP32 air quality monitor</title>
     <link href="/bulma.min.css" rel="stylesheet" />
-    <link href="/favicon.ico" rel="icon" type="image/x-icon" />
 </head>
 
 <body>
     <nav class="navbar" role="navigation" aria-label="main navigation">
         <div class="navbar-brand">
             <a class="navbar-item" href="/index">
-                <img src="/logo.png" width="90" height="30">
+                <img src="/logo.jpg" width="90" height="30">
             </a>
 
             <a role="button" class="navbar-burger" id="navbar_burger" aria-label="menu" aria-expanded="false"
@@ -114,6 +113,10 @@
                             <tr>
                                 <th>MAC address</th>
                                 <td id="device_mac"></td>
+                            </tr>
+                            <tr>
+                                <th>Memory</th>
+                                <td id="device_memory"></td>
                             </tr>
                             <tr>
                                 <th>SCD30 ASC</th>

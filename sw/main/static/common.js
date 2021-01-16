@@ -23,6 +23,9 @@ function get_info() {
                 mac_str += ":"
             });
             dev_mac.innerText = mac_str.toUpperCase().slice(0, -1);
+            var dev_memory = document.getElementById("device_memory");
+            dev_memory.innerText = Math.round(data.free_heap / 1024);
+            dev_memory.innerText += "/520 KiB"
             var dev_asc = document.getElementById("device_asc");
             dev_asc.innerText = data.asc ? "Enabled" : "Disabled";
 
@@ -43,6 +46,8 @@ function get_info() {
                 }
             }
 
+        }).catch((error) => {
+            console.error('Error:', error);
         });
 }
 

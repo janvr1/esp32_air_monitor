@@ -50,6 +50,9 @@ esp_err_t bme280_begin(bme280_dev_t *bme, bme280_params_t *params, uint8_t i2c_a
 
     bme->i2c_addr = i2c_addr;
     bme->i2c_port = i2c_port;
+    bme->temperature = 0;
+    bme->humidity = 0;
+    bme->pressure = 0;
 
     // Check chip ID
     ret = bme280_check_chip_id(bme);
