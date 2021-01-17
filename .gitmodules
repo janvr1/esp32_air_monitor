@@ -1,0 +1,3 @@
+[submodule "sw/components"]
+	path = sw/components
+	url = https://github.com/janvr1/esp32-components
