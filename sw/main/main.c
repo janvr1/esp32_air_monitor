@@ -357,13 +357,16 @@ void app_main(void)
                                        bme280.pressure,
                                        scd30.co2,
                                        veml.als);
-                float offset = scd30.temperature - bme280.temperature;
-                if (offset > 0)
-                    scd30_set_temp_offset(&scd30, offset);
-                else
-                    scd30_set_temp_offset(&scd30, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                scd30_start_measurement(&scd30, round(bme280.pressure) / 100);
+                if (timeinfo.tm_min == 0)
+                {
+                    float offset = scd30.temperature - bme280.temperature;
+                    if (offset > 0.5)
+                        scd30_set_temp_offset(&scd30, offset);
+                    else
+                        scd30_set_temp_offset(&scd30, 0);
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                    scd30_start_measurement(&scd30, round(bme280.pressure) / 100);
+                }
                 zrak_api_sent = true;
             }
             else if (zrak_api && zrak_api_sent && (timeinfo.tm_min == 31 || timeinfo.tm_min == 1))
