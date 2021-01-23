@@ -1,4 +1,4 @@
-8045123966705
+11267965076677
 Battery
 BatteryHolder_Bulgin_BX0036_1xC
 Bulgin Battery Holder, BX0036, Battery Type C (https://www.bulgin.com/products/pub/media/bulgin/data/Battery_holders.pdf)
@@ -83061,3 +83061,17 @@ MODULE_SCD30
 0
 7
 7
+qc_attiny
+Push_Button_6x6mm
+Through hole straight pin header, 1x03, 2.54mm pitch, single row
+Through hole pin header THT 1x03 2.54mm single row
+0
+2
+2
+qc_attiny
+USB-A_Multicomp
+USB type A Plug, Horizontal, http://cnctech.us/pdfs/1001-011-01101.pdf
+USB-A
+0
+6
+5

@@ -1,6 +1,5 @@
 ### TO-DO:
-* (HW) Dodaj tipko za FRC
-* (HW) Dodaj jumper za FRC enable/disable
+* (SW) Reconnect v primeru, da zmanjka wifi-ja
 * (SW) Ubidots
 
 ### Notes:

@@ -1,3 +1,4 @@
 (fp_lib_table
   (lib (name esp32_air_monitor)(type KiCad)(uri ${KIPRJMOD}/../libraries_footprints/esp32_air_monitor.pretty)(options "")(descr ""))
+  (lib (name qc_attiny)(type KiCad)(uri /home/jan/Projects/esp32_air_monitor/hw/libraries_footprints/qc_attiny.pretty)(options "")(descr ""))
 )

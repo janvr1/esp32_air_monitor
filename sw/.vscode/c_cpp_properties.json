@@ -16,7 +16,7 @@
                     "${config:idf.espIdfPathWin}/components",
                     "${workspaceFolder}"
                 ],
-                "limitSymbolsToIncludedHeaders": false
+                "limitSymbolsToIncludedHeaders": true
             },
             "compileCommands": "${workspaceFolder}/build/compile_commands.json"
         }
