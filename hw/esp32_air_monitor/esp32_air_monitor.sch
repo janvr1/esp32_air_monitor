@@ -333,7 +333,7 @@ F 3 "" H 2850 4900 50  0001 C CNN
 $EndComp
 Wire Wire Line
 	4950 4500 4700 4500
-Text Label 4700 3400 0    50   ~ 0
+Text Label 4700 3200 0    50   ~ 0
 SCL
 Wire Wire Line
 	2850 4500 3100 4500
@@ -348,7 +348,7 @@ Wire Wire Line
 Text Label 4700 4600 0    50   ~ 0
 OE
 Wire Wire Line
-	4700 3400 4950 3400
+	4700 3200 4950 3200
 Text Label 4700 4500 0    50   ~ 0
 LATCH
 Wire Wire Line

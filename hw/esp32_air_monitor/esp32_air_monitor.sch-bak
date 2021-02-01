@@ -333,7 +333,7 @@ F 3 "" H 2850 4900 50  0001 C CNN
 $EndComp
 Wire Wire Line
 	4950 4500 4700 4500
-Text Label 4700 3400 0    50   ~ 0
+Text Label 4700 3200 0    50   ~ 0
 SCL
 Wire Wire Line
 	2850 4500 3100 4500
@@ -753,7 +753,7 @@ Text Label 5800 5050 2    50   ~ 0
 BUT_1
 Text Label 6450 5050 2    50   ~ 0
 BUT_2
-Text Label 7050 5050 2    50   ~ 0
+Text Label 7100 5050 2    50   ~ 0
 BUT_3
 Wire Wire Line
 	8400 4350 8800 4350

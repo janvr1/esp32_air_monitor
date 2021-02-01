@@ -29,8 +29,8 @@ static const char *TAG = "MAIN";
 #define APP_MDNS_INSTANCE_NAME "ESP32 air monitor"
 
 // I2C parameters
-#define I2C_GPIO_SDA 15
-#define I2C_GPIO_SCL 4
+#define I2C_GPIO_SDA 22
+#define I2C_GPIO_SCL 23
 #define I2C_FREQUENCY 50000
 
 // IIR filter parameters (SCD30)
@@ -38,12 +38,12 @@ static const char *TAG = "MAIN";
 #define T_CUTOFF 30.0
 
 // LED matrix pins
-#define OE 16
-#define LATCH 18
-#define LINE_A 23
-#define LINE_B 22
-#define LINE_C 21
-#define LINE_D 19
+#define OE 15
+#define LATCH 2
+#define LINE_A 4
+#define LINE_B 18
+#define LINE_C 0
+#define LINE_D 5
 
 #define GUI_STR_TIME "%02d:%02d:%02d"
 #define GUI_STR_DATE "%02d.%02d.%02d"
