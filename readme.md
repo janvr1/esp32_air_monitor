@@ -1,5 +1,6 @@
 ### TO-DO:
 * (SW) Reconnect v primeru, da zmanjka wifi-ja
+* (SW) Fix memory leak
 * (SW) Ubidots
 
 ### Notes:

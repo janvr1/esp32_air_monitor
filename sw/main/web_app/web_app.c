@@ -511,9 +511,9 @@ static esp_err_t get_measurement_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(json, "RH", round(ctx->bme->humidity * 10) / 10.0);
     cJSON_AddNumberToObject(json, "T", round(ctx->bme->temperature * 10) / 10.0);
     cJSON_AddNumberToObject(json, "p", round(ctx->bme->pressure));
-    const char *measurements = cJSON_Print(json);
+    char *measurements = cJSON_Print(json);
     httpd_resp_sendstr(req, measurements);
-    free((void *)measurements);
+    free(measurements);
     cJSON_Delete(json);
     return ESP_OK;
 }
@@ -558,9 +558,9 @@ static esp_err_t get_info_handler(httpd_req_t *req)
     cJSON_AddItemToObject(json, "mac", mac_arr);
     cJSON_AddNumberToObject(json, "ip", ntohl(ip_info.ip.addr));
     cJSON_AddBoolToObject(json, "asc", scd30_get_asc(ctx->scd));
-    const char *info = cJSON_Print(json);
+    char *info = cJSON_Print(json);
     httpd_resp_sendstr(req, info);
-    free((void *)info);
+    free(info);
     cJSON_Delete(json);
     return ESP_OK;
 }
