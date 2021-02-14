@@ -57,6 +57,7 @@ led_matrix_t lm;
 // Function declarations
 static void initialize_mdns(char *hostname);
 static void initialize_sntp(void);
+static void wifi_event_handler_main(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
 float calculate_duty(float lux);
 
 // Task functions
@@ -196,9 +197,13 @@ void app_main(void)
         ESP_LOGW(TAG, "Unexpected wifi mode");
     }
 
-    // If we are connected to wifi, update time from SNTP
+    // If we are connected to wifi, update time from SNTP and start wifi event handler
     if (wifimode == WIFI_MODE_STA)
+    {
         initialize_sntp();
+        ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler_main, NULL);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
+    }
 
     // mDNS configuration
     char hostname[64];
@@ -374,6 +379,19 @@ void app_main(void)
         }
         count++;
         vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+
+static void wifi_event_handler_main(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    if (event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        ESP_LOGW(TAG, "Lost wifi connection. Retrying in 30 seconds");
+        vTaskDelay(30000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "Retrying WiFi connection...");
+        esp_err_t ret = esp_wifi_connect();
+        ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     }
 }
 
