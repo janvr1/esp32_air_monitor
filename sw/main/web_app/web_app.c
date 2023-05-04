@@ -10,6 +10,7 @@
 #include <esp_spiffs.h>
 #include <esp_http_server.h>
 #include <esp_heap_caps.h>
+#include "lwip/sys.h"
 #include "../utilities/jan_nvs.h"
 
 
@@ -189,7 +190,7 @@ static esp_err_t post_zrak_handler(httpd_req_t *req)
         ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
         ESP_LOGD(TAG, "Zrak API user: %s", cJSON_GetObjectItem(json, "user")->valuestring);
         ESP_LOGD(TAG, "Zrak API pass: %s", cJSON_GetObjectItem(json, "pass")->valuestring);
-        ESP_LOGD(TAG, "Zrak API dev_id: %d", cJSON_GetObjectItem(json, "dev_id")->valueint);
+        ESP_LOGD(TAG, "Zrak API dev_id: %"PRIi16"", cJSON_GetObjectItem(json, "dev_id")->valueint);
 
         if (ret == ESP_OK)
         {
@@ -248,7 +249,7 @@ static esp_err_t post_scd_frc_handler(httpd_req_t *req)
     // free(buf);
 
     int ref_val = strtol(val, NULL, 10);
-    ESP_LOGD(TAG, "Parsed FRC value: %d", ref_val);
+    ESP_LOGD(TAG, "Parsed FRC value: %"PRIi16"", ref_val);
 
     // free(val);
     web_app_context_t *ctx = (web_app_context_t *)req->user_ctx;
@@ -689,7 +690,7 @@ esp_err_t spiffs_init()
     }
     else
     {
-        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+        ESP_LOGI(TAG, "Partition size: total: %"PRIu16", used: %"PRIu16"", total, used);
     }
     return ESP_OK;
 }

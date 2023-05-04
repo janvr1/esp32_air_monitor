@@ -2,10 +2,18 @@
   "C_Cpp.clang_format_style": "Visual Studio",
   "editor.formatOnSave": false,
   "[cpp]": {
-    "editor.quickSuggestions": true
+    "editor.quickSuggestions": {
+      "comments": "on",
+      "strings": "on",
+      "other": "on"
+    }
   },
   "[c]": {
-    "editor.quickSuggestions": true
+    "editor.quickSuggestions": {
+      "comments": "on",
+      "strings": "on",
+      "other": "on"
+    }
   },
   "C_Cpp.intelliSenseEngine": "Tag Parser",
   "idf.port": "/dev/ttyUSB0",
@@ -18,5 +26,6 @@
     "system_error": "c",
     "math.h": "c",
     "sntp.h": "c"
-  }
+  },
+  "idf.adapterTargetName": "esp32"
 }

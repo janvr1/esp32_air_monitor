@@ -3,7 +3,7 @@
 // System libraries
 #include <stdio.h>
 #include <math.h>
-#include <mdns.h>
+
 #include <lwip/apps/netbiosns.h>
 #include <esp_log.h>
 #include <esp_task.h>
@@ -12,6 +12,7 @@
 #include <driver/i2c.h>
 
 // Own libraries
+#include <mdns.h>
 #include <jan_bme280.h>
 #include <jan_scd30.h>
 #include <jan_veml7700.h>
@@ -45,10 +46,10 @@ static const char *TAG = "MAIN";
 #define LINE_C 0
 #define LINE_D 5
 
-#define GUI_STR_TIME "%02d:%02d:%02d"
-#define GUI_STR_DATE "%02d.%02d.%02d"
-#define GUI_STR_T_RH "%02d`C %02d%%"
-#define GUI_STR_CO2 "%*d ppm"
+#define GUI_STR_TIME "%02" PRIu16 ":%02" PRIu16 ":%02" PRIu16 ""
+#define GUI_STR_DATE "%02" PRIu16 ".%02" PRIu16 ".%02" PRIu16 ""
+#define GUI_STR_T_RH "%02" PRIu16 "`C %02" PRIu16 "%%"
+#define GUI_STR_CO2 "%*" PRIu16 " ppm"
 #define GUI_STR_BLANK "        "
 
 // Led matrix handle
@@ -101,10 +102,12 @@ void app_main(void)
     ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
     if (ret != ESP_OK)
         ESP_LOGE(TAG, "Error initializing SCD30");
-    ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_set_altitude_comp(&scd30, 300));
+    // ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_set_altitude_comp(&scd30, 300));
     vTaskDelay(10 / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_set_temp_offset(&scd30, 0));
+    vTaskDelay(100 / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK_WITHOUT_ABORT(scd30_start_measurement(&scd30, 0));
+    bool scd30_comp = false;
 
     // VEML7700 configuration
     veml7700_dev_t veml;
@@ -133,6 +136,7 @@ void app_main(void)
     nvs_init();
 
     // WiFi configuration
+    esp_event_loop_create_default(); // Eevent loop for wifi
     esp_netif_t *netif;
     char ssid[32];
     char pass[64];
@@ -154,7 +158,9 @@ void app_main(void)
         }
     }
     else
+    {
         netif = wifi_init_softap();
+    }
 
     wifi_mode_t wifimode;
     ret = esp_wifi_get_mode(&wifimode);
@@ -178,8 +184,8 @@ void app_main(void)
         uint8_t D = ipaddr & 0xFF;
         char line1[9];
         char line2[9];
-        sprintf(line1, "%*d.%d.", 3, A, B);
-        sprintf(line2, "%*d.%d", 3, C, D);
+        sprintf(line1, "%*d.%" PRIu8 ".", 3, A, B);
+        sprintf(line2, "%*d.%" PRIu8 "", 3, C, D);
 
         lm_draw_text(&lm, "IP ADDR:", 0, 0, LM_COLOR_RED);
         lm_draw_text(&lm, line1, 0, 2, LM_COLOR_RED);
@@ -238,7 +244,7 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "Zrak API user: %s", zrak_user);
     ESP_LOGI(TAG, "Zrak API pass: %s", zrak_pass);
-    ESP_LOGI(TAG, "Zrak API dev_id: %d", zrak_dev_id);
+    ESP_LOGI(TAG, "Zrak API dev_id: %" PRIu32 "", zrak_dev_id);
 
     // Web app configuration
     // httpd_handle_t server = NULL;
@@ -280,7 +286,7 @@ void app_main(void)
         ESP_ERROR_CHECK_WITHOUT_ABORT(veml7700_read_als(&veml));
         duty = 0.3 * calculate_duty(veml.als) + 0.7 * duty;
         lm_set_duty(&lm, round(duty));
-        ESP_LOGI(TAG, "Duty: %f, %d", round(duty), lm.duty);
+        ESP_LOGI(TAG, "Duty: %f, %" PRIu16 "", round(duty), lm.duty);
 
         // If ambient light is low, change T and RH display to red color
         if (duty < 15)
@@ -308,12 +314,12 @@ void app_main(void)
         strftime(text_date, 9, "%d.%m.%y", &timeinfo);
         lm_draw_text(&lm, text_date, 0, 1, LM_COLOR_RED);
 
-        ESP_LOGI(TAG, "Count: %d", count / 5);
+        ESP_LOGI(TAG, "Count: %" PRIu32 "", count / 5);
 
         // Every 5 seconds, read the sensor data
         if (count % 5 == 0)
         {
-            ESP_LOGI(TAG, "Measurement count: %d", count / 5);
+            ESP_LOGI(TAG, "Measurement count: %" PRIu32 "", count / 5);
 
             // Read BME280
             ESP_ERROR_CHECK_WITHOUT_ABORT(bme280_measurement(&bme280));
@@ -353,6 +359,22 @@ void app_main(void)
             sprintf(text_co2, GUI_STR_CO2, 4, co2);
             lm_draw_text(&lm, text_co2, 0, 3, co2_color);
 
+            // Every full hour, update compensation data on SCD30
+            if ((timeinfo.tm_min == 0) && !scd30_comp)
+            {
+                float offset = scd30.temperature - bme280.temperature;
+                if (offset > 0)
+                    scd30_set_temp_offset(&scd30, offset); // Temperature compensation
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                scd30_start_measurement(&scd30, round(bme280.pressure) / 100); // Pressure compensation
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+                scd30_comp = true;
+            }
+            else if ((timeinfo.tm_min > 0) && scd30_comp)
+            {
+                scd30_comp = false;
+            }
+
             // Every half an hour, send Zrak API data to cloud, if enabled
             if (zrak_api && !zrak_api_sent && (timeinfo.tm_min == 30 || timeinfo.tm_min == 0))
             {
@@ -362,16 +384,6 @@ void app_main(void)
                                        bme280.pressure,
                                        scd30.co2,
                                        veml.als);
-                if (timeinfo.tm_min == 0)
-                {
-                    float offset = scd30.temperature - bme280.temperature;
-                    if (offset > 0.5)
-                        scd30_set_temp_offset(&scd30, offset);
-                    else
-                        scd30_set_temp_offset(&scd30, 0);
-                    vTaskDelay(200 / portTICK_PERIOD_MS);
-                    scd30_start_measurement(&scd30, round(bme280.pressure) / 100);
-                }
                 zrak_api_sent = true;
             }
             else if (zrak_api && zrak_api_sent && (timeinfo.tm_min == 31 || timeinfo.tm_min == 1))
@@ -383,7 +395,7 @@ void app_main(void)
 }
 
 static void wifi_event_handler_main(void *arg, esp_event_base_t event_base,
-                               int32_t event_id, void *event_data)
+                                    int32_t event_id, void *event_data)
 {
     if (event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
